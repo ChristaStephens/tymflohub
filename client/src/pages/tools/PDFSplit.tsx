@@ -38,34 +38,35 @@ export default function PDFSplit() {
     setProgress(0);
 
     try {
-      const formData = new FormData();
-      formData.append("file", files[0]);
-      formData.append("startPage", startPage);
-      if (endPage) {
-        formData.append("endPage", endPage);
+      const { PDFDocument } = await import("pdf-lib");
+      const arrayBuffer = await files[0].arrayBuffer();
+      setProgress(20);
+
+      const sourcePdf = await PDFDocument.load(arrayBuffer);
+      const pageCount = sourcePdf.getPageCount();
+      setProgress(40);
+
+      const start = Math.max(1, parseInt(startPage) || 1);
+      const end = Math.min(pageCount, parseInt(endPage) || pageCount);
+
+      if (start > end || start > pageCount) {
+        throw new Error("Invalid page range");
       }
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProgress((prev) => Math.min(prev + 15, 90));
-      }, 300);
+      const newPdf = await PDFDocument.create();
+      const pageIndices = Array.from({ length: end - start + 1 }, (_, i) => start - 1 + i);
+      const copiedPages = await newPdf.copyPages(sourcePdf, pageIndices);
+      copiedPages.forEach((page) => newPdf.addPage(page));
+      setProgress(80);
 
-      const response = await fetch("/api/pdf/split", {
-        method: "POST",
-        body: formData,
-      });
+      const pdfBytes = await newPdf.save();
+      const blob = new Blob([pdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
 
-      clearInterval(progressInterval);
-
-      if (!response.ok) {
-        throw new Error("Failed to split PDF");
-      }
-
-      const data = await response.json();
       setProgress(100);
       setProcessingStatus("complete");
-      setDownloadUrl(data.downloadUrl);
-      setFileName(data.filename);
+      setDownloadUrl(url);
+      setFileName(`split_pages_${start}-${end}.pdf`);
     } catch (error) {
       console.error("Split error:", error);
       setProcessingStatus("error");
@@ -79,7 +80,13 @@ export default function PDFSplit() {
 
   const handleDownload = () => {
     if (downloadUrl) {
-      window.location.href = downloadUrl;
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = fileName || "split.pdf";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
       setModalOpen(false);
       setFiles([]);
       setStartPage("1");
