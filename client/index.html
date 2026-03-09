@@ -27,5 +27,14 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      (function(){
+        var redirect = sessionStorage.redirect;
+        delete sessionStorage.redirect;
+        if (redirect && redirect !== location.href && redirect !== '/') {
+          history.replaceState(null, '', redirect);
+        }
+      })();
+    </script>
   </body>
 </html>
