@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TymFlo Hub</title>
+  <script>
+    var pathSegmentsToKeep = 0;
+    var l = window.location;
+    var repo = l.pathname.split('/').filter(Boolean);
+    var base = repo.length > pathSegmentsToKeep
+      ? '/' + repo.slice(0, pathSegmentsToKeep).join('/') + (pathSegmentsToKeep > 0 ? '/' : '')
+      : '/';
+    sessionStorage.redirect = l.pathname + l.search + l.hash;
+    l.replace(base);
+  </script>
+</head>
+<body>
+</body>
+</html>
