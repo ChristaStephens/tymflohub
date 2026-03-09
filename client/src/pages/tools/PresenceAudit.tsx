@@ -10,73 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import SEO from "@/components/SEO";
 import { HowItWorks, Features, FAQSection } from "@/components/SEOContent";
-
-interface Check {
-  name: string;
-  status: "pass" | "warning" | "fail";
-  message: string;
-  recommendation?: string;
-  category: string;
-  priority: "high" | "medium" | "low";
-}
-
-interface SocialProfile {
-  platform: string;
-  url?: string;
-  found: boolean;
-}
-
-interface AuditResult {
-  url: string;
-  timestamp: string;
-  overallScore: number;
-  grades: {
-    seo: { score: number; grade: string };
-    performance: { score: number; grade: string };
-    security: { score: number; grade: string };
-    usability: { score: number; grade: string };
-    social: { score: number; grade: string };
-  };
-  checks: Check[];
-  socialProfiles: SocialProfile[];
-  recommendations: string[];
-  metadata: {
-    title?: string;
-    description?: string;
-    keywords?: string;
-    favicon?: string;
-    ogImage?: string;
-    twitterCard?: string;
-  };
-  performance: {
-    pageSize: number;
-    responseTime: number;
-    scriptCount: number;
-    stylesheetCount: number;
-    imageCount: number;
-  };
-  links: {
-    internal: number;
-    external: number;
-    nofollow: number;
-  };
-  headings: {
-    h1: number;
-    h2: number;
-    h3: number;
-    h4: number;
-    h5: number;
-    h6: number;
-  };
-  securityHeaders: {
-    hsts: boolean;
-    csp: boolean;
-    xFrameOptions: boolean;
-    xContentTypeOptions: boolean;
-    xXssProtection: boolean;
-    referrerPolicy: boolean;
-  };
-}
+import { runClientAudit, type AuditResult } from "@/lib/auditEngine";
 
 function getGradeColor(grade: string) {
   switch (grade) {
@@ -138,18 +72,7 @@ export default function PresenceAudit() {
     setResult(null);
 
     try {
-      const response = await fetch("/api/audit/website", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: normalizedUrl }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to analyze website");
-      }
-
-      const data = await response.json();
+      const data = await runClientAudit(normalizedUrl);
       setResult(data);
       toast({ title: "Audit Complete!", description: `Overall score: ${data.overallScore}/100` });
     } catch (error: any) {
