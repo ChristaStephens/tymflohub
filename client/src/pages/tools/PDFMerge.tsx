@@ -34,32 +34,25 @@ export default function PDFMerge() {
     setProgress(0);
 
     try {
-      const formData = new FormData();
-      files.forEach((file) => {
-        formData.append("files", file);
-      });
+      const { PDFDocument } = await import("pdf-lib");
+      const mergedPdf = await PDFDocument.create();
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProgress((prev) => Math.min(prev + 15, 90));
-      }, 300);
-
-      const response = await fetch("/api/pdf/merge", {
-        method: "POST",
-        body: formData,
-      });
-
-      clearInterval(progressInterval);
-
-      if (!response.ok) {
-        throw new Error("Failed to merge PDFs");
+      for (let i = 0; i < files.length; i++) {
+        const arrayBuffer = await files[i].arrayBuffer();
+        const pdf = await PDFDocument.load(arrayBuffer);
+        const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+        copiedPages.forEach((page) => mergedPdf.addPage(page));
+        setProgress(Math.round(((i + 1) / files.length) * 90));
       }
 
-      const data = await response.json();
+      const mergedBytes = await mergedPdf.save();
+      const blob = new Blob([mergedBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+
       setProgress(100);
       setProcessingStatus("complete");
-      setDownloadUrl(data.downloadUrl);
-      setFileName(data.filename);
+      setDownloadUrl(url);
+      setFileName("merged.pdf");
     } catch (error) {
       console.error("Merge error:", error);
       setProcessingStatus("error");
@@ -73,7 +66,13 @@ export default function PDFMerge() {
 
   const handleDownload = () => {
     if (downloadUrl) {
-      window.location.href = downloadUrl;
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = fileName || "merged.pdf";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
       setModalOpen(false);
       setFiles([]);
       toast({
