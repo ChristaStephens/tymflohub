@@ -1,0 +1,97 @@
+A) Find exactly where helium is set
+
+In the Replit Shell (Console tab), run:
+
+# 1) Search the codebase (ignore node_modules):
+grep -Rni --exclude-dir=node_modules -E 'helium|DATABASE_URL|PGHOST|connect-pg-simple|new Pool|pg\.Pool' .
+
+# 2) See env vars actually present at runtime:
+env | sort | grep -i -E 'helium|pg|postgres|database|db|pgstore|neon|supabase|railway|elephant'
+
+
+If result (2) shows something like DATABASE_URL=postgres://user:pass@helium:5432/db, the problem is in Secrets.
+
+If result (1) shows helium in code (e.g., PGHOST='helium' or a hard-coded connection string), the problem is in code.
+
+Tip: also check Replit → Secrets manually. Look for DATABASE_URL, PGHOST, PGUSER, PGPASSWORD, PGDATABASE, PGPORT, PGSSLMODE, or anything like PGSTORE_URL.
+
+B) Patch the Postgres host
+If it’s in Secrets (most likely)
+
+Open Replit → Secrets.
+
+Fix DATABASE_URL (or PGHOST) to use your real DB host (Neon/Supabase/Railway/etc.):
+
+Example (Neon):
+
+DATABASE_URL=postgres://USER:PASSWORD@ep-happy-1234.us-east-2.aws.neon.tech:5432/DBNAME?sslmode=require
+
+
+Example (Supabase):
+
+DATABASE_URL=postgres://USER:PASSWORD@db.PROJECT.supabase.co:5432/DBNAME?sslmode=require
+
+
+If you use discrete vars instead of a URL, set:
+
+PGHOST=<FQDN from your provider>
+PGUSER=<user>
+PGPASSWORD=<password>
+PGDATABASE=<db>
+PGPORT=5432
+PGSSLMODE=require
+
+
+Republish the deployment (Deployment → Republish). Backend env changes take effect on restart; frontend VITE_* changes require a rebuild (republish handles that).
+
+If it’s hard-coded in code
+
+Find the file the grep returned (often your DB init or session store). Replace helium with process.env.PGHOST or a parsed DATABASE_URL.
+
+Example diff (Node/pg + connect-pg-simple):
+
+- const pool = new Pool({ host: 'helium', user: '...', password: '...', database: '...', port: 5432 });
++ const { Pool } = require('pg');
++ const connectionString = process.env.DATABASE_URL;
++ const pool = connectionString
++   ? new Pool({ connectionString, ssl: { rejectUnauthorized: false } })
++   : new Pool({
++       host: process.env.PGHOST,
++       port: Number(process.env.PGPORT || 5432),
++       user: process.env.PGUSER,
++       password: process.env.PGPASSWORD,
++       database: process.env.PGDATABASE,
++       ssl: { rejectUnauthorized: false }
++     });
+
+- const pgSession = require('connect-pg-simple')(session);
+- app.use(session({ store: new pgSession({ pool }), secret: process.env.SESSION_SECRET, resave: false, saveUninitialized: false }));
++ const pgSession = require('connect-pg-simple')(session);
++ app.use(session({
++   store: new pgSession({ pool }),
++   secret: process.env.SESSION_SECRET,
++   resave: false,
++   saveUninitialized: false
++ }));
+
+
+If you just need the site to come up while you sort DB creds, temporarily switch the session store to MemoryStore for a single deploy (not for production), then switch back once DATABASE_URL is correct.
+
+C) Prove it worked (no more EAI_AGAIN)
+
+Add a health endpoint if you don’t have one:
+
+// somewhere in your Express setup:
+app.get('/health', (_req, res) => res.status(200).json({ ok: true }));
+
+
+Republish the deployment.
+
+In the Shell:
+
+# Check logs for 1–2 minutes — there should be no "EAI_AGAIN helium"
+# Then hit the health endpoint:
+curl -i https://tym-flo-hub-ChristaStephens.replit.app/health
+
+
+You want HTTP/1.1 200 with { "ok": true } and no getaddrinfo EAI_AGAIN helium lines continuing in the Logs tab.

@@ -1,0 +1,385 @@
+Replit Build Brief — TymFlo Hub (MVP 1.0)
+0) Project Summary (what to build)
+
+Create TymFlo Hub: a fast, SEO-driven web app that offers:
+
+Business Calculators (profit margin, markup, break-even, ROI).
+
+Document Tools (PDF merge/split/compress, image convert).
+
+Productivity Utilities (timezone converter, Pomodoro timer).
+
+Ship as a freemium product (5 free operations/day). Pro removes limits (Square payments). Must be PWA (offline shell), sub-2s load time, accessible, and SEO-optimized with one landing page per tool.
+
+1) Tech Stack (opinionated to reduce choices)
+
+Frontend: Vite + React + TypeScript (fast, simple), TailwindCSS (utility styling).
+
+Backend: Node + Express (single server in Replit), TypeScript.
+
+Data: SQLite via Prisma (simple, file-based), fallback to Replit DB if needed.
+
+Auth: Passwordless magic link (email) via Magic.link OR simple email+OTP (local) for MVP.
+
+Payments: Square (create checkout links; no vaulting in MVP).
+
+File ops: pdf-lib for PDFs, sharp for images.
+
+Rate limiting: express-rate-limit + IP/session.
+
+Logging: pino.
+
+Testing: Vitest (unit) + Playwright (smoke/E2E).
+
+Analytics: Plausible or PostHog snippet.
+
+PWA: service worker via vite-plugin-pwa.
+
+2) Folder & File Structure (exact names)
+/app
+  /src
+    /client
+      /components
+        Header.tsx
+        Footer.tsx
+        ToolCard.tsx
+        CalculatorForm.tsx
+        ResultPanel.tsx
+        PricingTable.tsx
+        UpgradeNudge.tsx
+        LimitBadge.tsx
+        SEO.tsx
+      /pages
+        index.tsx
+        pricing.tsx
+        login.tsx
+        dashboard.tsx
+        tools/
+          profit-margin.tsx
+          markup.tsx
+          breakeven.tsx
+          roi.tsx
+          pdf-merge.tsx
+          pdf-split.tsx
+          pdf-compress.tsx
+          image-convert.tsx
+          timezone.tsx
+          pomodoro.tsx
+      main.tsx
+      index.css
+      sw.ts        # service worker
+      manifest.webmanifest
+    /server
+      server.ts
+      router.ts
+      /controllers
+        auth.controller.ts
+        usage.controller.ts
+        tools.controller.ts
+        payments.controller.ts
+        seo.controller.ts
+      /services
+        calculators.service.ts
+        pdf.service.ts
+        image.service.ts
+        email.service.ts
+        payments.service.ts
+        usage.service.ts
+      /middleware
+        auth.ts
+        rateLimit.ts
+        errorHandler.ts
+      /db
+        schema.prisma
+        seed.ts
+      /utils
+        logger.ts
+        env.ts
+        validators.ts
+  /public
+    robots.txt
+    sitemap.xml          # generated at build/start
+    icons/*
+  .env.example
+  package.json
+  vite.config.ts
+  tsconfig.json
+  tailwind.config.js
+  postcss.config.js
+  README.md
+
+3) Environment Variables (.env.example)
+NODE_ENV=development
+PORT=3000
+
+# Auth (pick one for MVP)
+MAGIC_PUBLIC_KEY=
+MAGIC_SECRET_KEY=
+
+# or simple OTP mail (Mailgun/Sendgrid/Resend)
+EMAIL_FROM=no-reply@tymflohub.com
+EMAIL_PROVIDER_API_KEY=
+
+# Payments (Square)
+SQUARE_ACCESS_TOKEN=
+SQUARE_LOCATION_ID=
+SQUARE_ENV=sandbox
+
+# Analytics (optional)
+PLAUSIBLE_DOMAIN=tymflohub.com
+
+4) NPM Packages (install now)
+# core
+npm i express cors zod pino pdf-lib sharp express-rate-limit
+npm i -D typescript ts-node ts-node-dev @types/node @types/express
+
+# react app
+npm i react react-dom
+npm i -D vite @vitejs/plugin-react vite-plugin-pwa
+npm i -D tailwindcss postcss autoprefixer
+
+# auth (choose)
+npm i magic-sdk @magic-sdk/admin
+# or email provider
+npm i @sendgrid/mail    # or resend
+
+# db
+npm i prisma @prisma/client
+npm i -D prisma
+
+# testing
+npm i -D vitest playwright @testing-library/react @testing-library/jest-dom
+
+5) Database Schema (Prisma /server/db/schema.prisma)
+datasource db { provider = "sqlite"; url = "file:./dev.db" }
+generator client { provider = "prisma-client-js" }
+
+model User {
+  id        String  @id @default(cuid())
+  email     String  @unique
+  createdAt DateTime @default(now())
+  plan      Plan     @default(FREE)
+  usage     Usage?
+}
+
+model Usage {
+  id        String  @id @default(cuid())
+  userId    String  @unique
+  periodKey String   // e.g. "2025-10-24"
+  ops       Int      @default(0)
+  User      User     @relation(fields: [userId], references: [id])
+}
+
+enum Plan { FREE PRO TEAM }
+
+6) Routing (server /server/router.ts)
+
+POST /api/auth/magic/login → start magic link.
+
+POST /api/auth/magic/callback → verify, set httpOnly cookie.
+
+GET /api/usage → get today’s usage & limits.
+
+POST /api/usage/increment → increment per tool op.
+
+POST /api/tools/calculator → run calculators (type param: profitMargin, markup, roi, breakeven).
+
+POST /api/tools/pdf/merge → accept up to 5 files, return merged file (stream).
+
+POST /api/tools/pdf/split
+
+POST /api/tools/pdf/compress
+
+POST /api/tools/image/convert
+
+GET /api/payments/checkout?plan=PRO|TEAM → returns Square checkout link.
+
+POST /api/payments/webhook → upgrade plan on success.
+
+GET /sitemap.xml (generated)
+
+GET /robots.txt
+
+Middleware: global CORS, JSON, rateLimit on /api/tools/*, auth required for Pro operations.
+
+7) Usage Limits (freemium)
+
+FREE: 5 operations/day (any tool).
+
+PRO: unlimited + batch ops for PDFs/images.
+
+TEAM: same as PRO + shared workspace (MVP: shared label only).
+Implement usage.service.ts to:
+
+Compute periodKey = YYYY-MM-DD.
+
+Block with 429 if limit exceeded.
+
+Client shows UpgradeNudge when limit hit.
+
+8) SEO Requirements
+
+One static route per tool page (React) with:
+
+<title>, meta description, canonical link.
+
+H1, short description (100–150w), FAQ (schema.org FAQPage).
+
+Generate sitemap.xml at boot from a tools.json registry:
+
+[
+  { "slug": "profit-margin-calculator", "title": "Profit Margin Calculator" },
+  { "slug": "pdf-merge", "title": "PDF Merger" }
+]
+
+
+robots.txt allow all.
+
+Page speed target: < 2s on first load, LCP < 2.5s.
+
+Create a reusable <SEO /> component that takes title, description, canonical.
+
+9) PWA Requirements
+
+vite-plugin-pwa with:
+
+manifest.webmanifest (name, short_name, icons, start_url).
+
+sw.ts caching shell + tool pages.
+
+Offline behavior: show cached UI + message “This tool requires online processing” for server jobs.
+
+10) UI Requirements (clean & accessible)
+
+Header: logo (text), nav: Tools, Pricing, Login/Dashboard.
+
+Home: hero (value: “Work Smarter. Every Day.”), search bar “Find a tool…”, grid of top tools (ToolCard).
+
+Tool page: left form (CalculatorForm), right results (ResultPanel), FAQs, UpgradeNudge when applicable.
+
+Pricing page: Free vs Pro vs Team (PricingTable).
+
+Dashboard: usage today, recent tools, upgrade CTA.
+
+Tailwind for layout. Meet WCAG AA (color contrast, focus styles, semantic landmarks).
+
+11) Example: Calculator Logic (server/services/calculators.service.ts)
+export function calcProfitMargin({ cost, price }: { cost:number; price:number }) {
+  if (cost <= 0 || price <= 0) throw new Error("Invalid inputs");
+  const profit = price - cost;
+  const margin = (profit / price) * 100;
+  return { profit, margin: Number(margin.toFixed(2)) };
+}
+export function calcMarkup({ cost, price }:{ cost:number; price:number }) {
+  if (cost <= 0 || price <= 0) throw new Error("Invalid inputs");
+  const profit = price - cost;
+  const markup = (profit / cost) * 100;
+  return { profit, markup: Number(markup.toFixed(2)) };
+}
+
+
+Client form (profit-margin.tsx) posts to /api/tools/calculator with { type:"profitMargin", cost, price }, shows result, increments usage.
+
+12) Example: PDF Merge (server/services/pdf.service.ts)
+
+Use multer for multipart upload (limit 5 files, 10MB each for Free, 100MB for Pro).
+
+Use pdf-lib to merge pages; return as application/pdf stream with Content-Disposition: attachment.
+
+13) Payments (Square) — MVP Flow
+
+Pricing page “Upgrade to Pro” → calls /api/payments/checkout?plan=PRO.
+
+Server uses Square SDK to create a checkout link (no card handling in our app).
+
+Square webhook on success → upgrade User.plan = PRO.
+
+Show “Pro” badge in header and remove limits.
+
+14) Analytics
+
+Add Plausible script on all pages.
+
+Track events: tool_used, limit_reached, upgrade_clicked, upgrade_success.
+
+15) Acceptance Criteria (must pass before “done”)
+
+Performance: Home and top tool pages load < 2s on cold start in Replit.
+
+SEO: /sitemap.xml lists each tool page; pages have unique title/description.
+
+Freemium Limit: Free users blocked after 5 ops/day with friendly UpgradeNudge.
+
+Pro Plan: Checkout with Square works; webhook upgrades user; limits lifted.
+
+PWA: Installable; offline shell loads; graceful message for server tools.
+
+Accessibility: Keyboard nav works; labeled inputs; contrast AA.
+
+Testing:
+
+Vitest: unit tests for calculators.
+
+Playwright: one smoke flow (login → use tool → hit limit).
+
+16) Copy & Microcopy (use now)
+
+Home hero: Save hours every week. TymFlo Hub gives you the calculators and document tools you use most—fast, simple, and free.
+
+Upgrade nudge: You’ve hit today’s free limit. Go Pro for unlimited tools and no ads.
+
+Pricing bullets (Pro): Unlimited tools · No ads · Up to 100MB files · Batch processing · Priority support
+
+17) Initial Tool List (ship in MVP)
+
+Calculators: profit margin, markup, break-even, ROI.
+
+PDFs: merge, split, compress.
+
+Images: convert (PNG/JPG/WebP).
+
+Productivity: timezone converter, Pomodoro.
+
+Add more after launch; each tool gets its own route + SEO page.
+
+18) Security & Privacy (MVP)
+
+Auto-delete uploaded files from temp dir within 60 minutes.
+
+Never store user files server-side after processing.
+
+Use HTTPS, httpOnly cookies for sessions.
+
+Basic TOS/Privacy links in footer (placeholder pages).
+
+19) Milestones
+
+Week 1–2: Scaffold, auth, calculators working end-to-end, usage limits.
+
+Week 3: PDF merge/split/compress; image convert; SEO pages; sitemap.
+
+Week 4: Payments (Square), PWA, analytics, tests; launch.
+
+20) Post-Launch Checklist
+
+Add blog (/blog) with 4 SEO how-to posts tied to tools.
+
+Submit sitemap in Google Search Console.
+
+Monitor conversions; tune UpgradeNudge copy.
+
+Add “Invite a friend, get 1 free unlimited day” referral (optional).
+
+Instructions to Replit AI
+
+Create the exact file/folder structure above.
+
+Generate boilerplate React pages and Express routes.
+
+Implement the four calculators and three PDF tools as described.
+
+Wire up usage limits and Square checkout stubs (fake success route for dev).
+
+Add PWA config, SEO component, and sitemap generator.
+
+Include Vitest unit tests for calculator functions and a Playwright smoke test.
