@@ -40,31 +40,62 @@ export default function ImageConvert() {
     setProgress(0);
 
     try {
-      const formData = new FormData();
-      formData.append("file", files[0]);
-      formData.append("format", format);
+      const file = files[0];
+      setProgress(10);
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProgress((prev) => Math.min(prev + 15, 90));
-      }, 200);
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
 
-      const response = await fetch("/api/image/convert", {
-        method: "POST",
-        body: formData,
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Failed to load image"));
+        img.src = objectUrl;
       });
 
-      clearInterval(progressInterval);
+      setProgress(40);
 
-      if (!response.ok) {
-        throw new Error("Failed to convert image");
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not supported");
+
+      if (format === "jpg") {
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
 
-      const data = await response.json();
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(objectUrl);
+
+      setProgress(70);
+
+      const mimeMap: Record<string, string> = {
+        png: "image/png",
+        jpg: "image/jpeg",
+        webp: "image/webp",
+      };
+      const mime = mimeMap[format] || "image/png";
+      const quality = format === "png" ? undefined : 0.92;
+
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("Conversion failed"))),
+          mime,
+          quality
+        );
+      });
+
+      setProgress(90);
+
+      const baseName = file.name.replace(/\.[^/.]+$/, "");
+      const outputName = `${baseName}.${format === "jpg" ? "jpg" : format}`;
+      const blobUrl = URL.createObjectURL(blob);
+
       setProgress(100);
       setProcessingStatus("complete");
-      setDownloadUrl(data.downloadUrl);
-      setFileName(data.filename);
+      setDownloadUrl(blobUrl);
+      setFileName(outputName);
     } catch (error) {
       console.error("Convert error:", error);
       setProcessingStatus("error");
@@ -78,9 +109,16 @@ export default function ImageConvert() {
 
   const handleDownload = () => {
     if (downloadUrl) {
-      window.location.href = downloadUrl;
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
       setModalOpen(false);
       setFiles([]);
+      setDownloadUrl("");
       toast({
         title: "Download started",
         description: "Your converted image is downloading",
