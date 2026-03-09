@@ -6,9 +6,15 @@ TymFlo Hub is a freemium SaaS web application providing business calculators, PD
 
 **Core Purpose**: Deliver fast, SEO-optimized tools for business calculations (profit margin, markup, break-even, ROI), document processing (PDF merge/split/compress, image conversion), and productivity features (timezone converter, Pomodoro timer).
 
-**Business Model**: Free tier (5 operations/day) with Pro upgrade via Square payments (payment links/linq) for unlimited access.
+**Business Model**: Always free, no registration required. Optional Pro upgrade via Stripe for advanced features.
 
 **Technical Goals**: Sub-2s load times, PWA capabilities, accessible design, SEO optimization with dedicated landing pages per tool.
+
+**Deployment**: Dual deployment strategy:
+- **Replit**: Full-stack deployment with server-side features (auth, analytics, admin)
+- **GitHub Pages**: Static deployment — all tools work client-side without a server. GitHub Actions workflow auto-deploys on push to main.
+
+**GitHub Repository**: `ChristaStephens/tymflohub`
 
 ## User Preferences
 
