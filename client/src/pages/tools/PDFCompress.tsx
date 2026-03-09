@@ -37,35 +37,63 @@ export default function PDFCompress() {
     setProgress(0);
 
     try {
-      const formData = new FormData();
-      formData.append("file", files[0]);
+      const { PDFDocument } = await import("pdf-lib");
+      const originalBytes = await files[0].arrayBuffer();
+      const originalSize = originalBytes.byteLength;
+      setProgress(20);
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProgress((prev) => Math.min(prev + 15, 90));
-      }, 300);
+      const sourcePdf = await PDFDocument.load(originalBytes);
+      setProgress(40);
 
-      const response = await fetch("/api/pdf/compress", {
-        method: "POST",
-        body: formData,
+      const compressedPdf = await PDFDocument.create();
+      const pages = await compressedPdf.copyPages(sourcePdf, sourcePdf.getPageIndices());
+      pages.forEach((page) => compressedPdf.addPage(page));
+      setProgress(60);
+
+      compressedPdf.setTitle("");
+      compressedPdf.setAuthor("");
+      compressedPdf.setSubject("");
+      compressedPdf.setKeywords([]);
+      compressedPdf.setProducer("");
+      compressedPdf.setCreator("");
+      setProgress(80);
+
+      const compressedBytes = await compressedPdf.save({
+        useObjectStreams: true,
+        addDefaultPage: false,
       });
+      const compressedSize = compressedBytes.length;
 
-      clearInterval(progressInterval);
+      const blob = new Blob([compressedBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
 
-      if (!response.ok) {
-        throw new Error("Failed to compress PDF");
+      const savedBytes = originalSize - compressedSize;
+      const ratio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+
+      const finalBytes = savedBytes > 0 ? compressedBytes : new Uint8Array(originalBytes);
+      const finalSize = savedBytes > 0 ? compressedSize : originalSize;
+      const finalBlob = new Blob([finalBytes], { type: "application/pdf" });
+      const finalUrl = URL.createObjectURL(finalBlob);
+      if (savedBytes <= 0) {
+        URL.revokeObjectURL(url);
       }
 
-      const data = await response.json();
       setProgress(100);
       setProcessingStatus("complete");
-      setDownloadUrl(data.downloadUrl);
-      setFileName(data.filename);
+      setDownloadUrl(savedBytes > 0 ? url : finalUrl);
+      setFileName(savedBytes > 0 ? `compressed_${files[0].name}` : files[0].name);
       setCompressionStats({
-        originalSize: data.originalSize,
-        compressedSize: data.compressedSize,
-        compressionRatio: data.compressionRatio,
+        originalSize,
+        compressedSize: finalSize,
+        compressionRatio: savedBytes > 0 ? ratio : "0.0",
       });
+
+      if (savedBytes <= 0) {
+        toast({
+          title: "Already Optimized",
+          description: "This PDF is already well-optimized. The original file has been preserved.",
+        });
+      }
     } catch (error) {
       console.error("Compress error:", error);
       setProcessingStatus("error");
@@ -79,7 +107,13 @@ export default function PDFCompress() {
 
   const handleDownload = () => {
     if (downloadUrl) {
-      window.location.href = downloadUrl;
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = fileName || "compressed.pdf";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
       setModalOpen(false);
       setFiles([]);
       toast({
@@ -127,7 +161,7 @@ export default function PDFCompress() {
     {
       icon: <Shield className="w-6 h-6" />,
       title: "Secure & Private",
-      description: "Files encrypted with 256-bit TLS. Auto-deleted after 1 hour.",
+      description: "All processing happens in your browser. Files never leave your device.",
     },
     {
       icon: <Globe className="w-6 h-6" />,
