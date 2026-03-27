@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Menu, X } from "lucide-react";
+import { Menu, X, Video } from "lucide-react";
 import logoImage from "@assets/Tymflo-horizontal-crlPng_1761361152989.png";
 
 export default function Header() {
@@ -17,6 +17,10 @@ export default function Header() {
         <nav className="hidden md:flex items-center gap-8">
           <Link href="/" className="text-base font-medium text-foreground hover:text-primary transition-colors" data-testid="link-tools">
             All Tools
+          </Link>
+          <Link href="/recorder" className="flex items-center gap-1.5 text-base font-medium text-foreground hover:text-primary transition-colors" data-testid="link-recorder">
+            <Video className="w-4 h-4" />
+            Recorder
           </Link>
           <Link href="/pricing" className="text-base font-medium text-foreground hover:text-primary transition-colors" data-testid="link-support">
             Support Us
@@ -44,6 +48,15 @@ export default function Header() {
               onClick={() => setMobileMenuOpen(false)}
             >
               All Tools
+            </Link>
+            <Link 
+              href="/recorder" 
+              className="flex items-center gap-2 text-base font-medium hover:text-primary py-2" 
+              data-testid="link-recorder-mobile"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              <Video className="w-4 h-4" />
+              Recorder
             </Link>
             <Link 
               href="/pricing" 
