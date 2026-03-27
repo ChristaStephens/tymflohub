@@ -55,6 +55,7 @@ import BusinessPageQR from "@/pages/tools/BusinessPageQR";
 import MenuQR from "@/pages/tools/MenuQR";
 import AppLinkQR from "@/pages/tools/AppLinkQR";
 import PresenceAudit from "@/pages/tools/PresenceAudit";
+import Recorder from "@/pages/Recorder";
 import AdminAnalytics from "@/pages/AdminAnalytics";
 import NotFound from "@/pages/not-found";
 
@@ -136,6 +137,9 @@ function AppRouter() {
       
       {/* Marketing Tools */}
       <Route path="/tools/presence-audit" component={PresenceAudit} />
+
+      {/* Recorder */}
+      <Route path="/recorder" component={Recorder} />
       
       {/* Admin */}
       <Route path="/admin/analytics" component={AdminAnalytics} />
