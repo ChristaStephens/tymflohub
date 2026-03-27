@@ -9,21 +9,11 @@ import {
   Monitor, Camera, Layers, Mic, MicOff, Play, Pause, Square,
   Download, Trash2, Plus, ChevronUp, ChevronDown, FileText, Video,
   Circle, CheckCircle, ClipboardCopy, RotateCcw, Scissors, Info,
-  GripVertical, Image, PenLine, Bookmark, AlertCircle,
+  GripVertical, Image, PenLine, Bookmark, AlertCircle, FolderOpen,
+  BookOpen, X, Clock,
 } from "lucide-react";
 
-// Sets href via ref after mount so React never sees the javascript: URL in JSX
-function BookmarkletLink({ code, className, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { code: string }) {
-  const ref = useRef<HTMLAnchorElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.href = code;
-  }, [code]);
-  return (
-    <a ref={ref} href="#" draggable className={className} {...rest}>
-      {children}
-    </a>
-  );
-}
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type RecordMode = "screen" | "camera" | "screen+camera";
 type RecordState = "idle" | "recording" | "paused" | "done";
@@ -36,8 +26,93 @@ interface ProcessStep {
   description: string;
 }
 
+interface SavedGuide {
+  id: string;
+  title: string;
+  steps: ProcessStep[];
+  savedAt: string;
+}
+
+// ─── Guide Library (IndexedDB) ────────────────────────────────────────────────
+
+async function dbOpen(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("tymflo-guides", 1);
+    req.onupgradeneeded = e => {
+      (e.target as IDBOpenDBRequest).result.createObjectStore("guides", { keyPath: "id" });
+    };
+    req.onsuccess = e => resolve((e.target as IDBOpenDBRequest).result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbSave(title: string, steps: ProcessStep[]): Promise<void> {
+  const db = await dbOpen();
+  const rec: SavedGuide = { id: Date.now().toString(), title: title || "Untitled Guide", steps, savedAt: new Date().toISOString() };
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("guides", "readwrite");
+    tx.objectStore("guides").put(rec);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbLoadAll(): Promise<SavedGuide[]> {
+  const db = await dbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("guides", "readonly");
+    const req = tx.objectStore("guides").getAll();
+    req.onsuccess = () => resolve((req.result as SavedGuide[]).sort((a, b) => b.savedAt.localeCompare(a.savedAt)));
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbDelete(id: string): Promise<void> {
+  const db = await dbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("guides", "readwrite");
+    tx.objectStore("guides").delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ─── BookmarkletLink helper ───────────────────────────────────────────────────
+// Sets href via ref after mount so React never sees javascript: in JSX
+
+function BookmarkletLink({ code, className, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { code: string }) {
+  const ref = useRef<HTMLAnchorElement>(null);
+  useEffect(() => { if (ref.current) ref.current.href = code; }, [code]);
+  return (
+    <a ref={ref} href="#" draggable className={className} {...rest}>
+      {children}
+    </a>
+  );
+}
+
+// ─── Root component ───────────────────────────────────────────────────────────
+
 export default function Recorder() {
   const [activeTab, setActiveTab] = useState<Tab>("recorder");
+  const [importedSteps, setImportedSteps] = useState<ProcessStep[] | null>(null);
+  const [importedTitle, setImportedTitle] = useState("");
+  const [importPending, setImportPending] = useState(false);
+
+  // Message listener lives here so it fires even before Process Guide tab mounts
+  useEffect(() => {
+    if (window.opener) window.opener.postMessage({ type: "tymflo_ready" }, "*");
+
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === "tymflo_import" && Array.isArray(e.data.steps)) {
+        setImportedSteps(e.data.steps);
+        setImportedTitle(e.data.title || "");
+        setImportPending(true);
+        setActiveTab("process");
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -64,23 +139,33 @@ export default function Recorder() {
               key={id}
               onClick={() => setActiveTab(id)}
               data-testid={`tab-${id}`}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              className={`relative flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === id ? "bg-[#463176] text-white" : "text-gray-600 hover:text-gray-900"
               }`}
             >
               <Icon className="w-4 h-4" />
               {label}
+              {id === "process" && importPending && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#F69679] rounded-full" />
+              )}
             </button>
           ))}
         </div>
 
-        {activeTab === "recorder" ? <ScreenRecorderTab /> : <ProcessGuideTab />}
+        {activeTab === "recorder"
+          ? <ScreenRecorderTab />
+          : <ProcessGuideTab
+              importedSteps={importedSteps}
+              importedTitle={importedTitle}
+              onImportConsumed={() => { setImportedSteps(null); setImportedTitle(""); setImportPending(false); }}
+            />
+        }
       </div>
     </div>
   );
 }
 
-// ─── Screen Recorder ────────────────────────────────────────────────────────
+// ─── Screen Recorder Tab ──────────────────────────────────────────────────────
 
 function ScreenRecorderTab() {
   const { toast } = useToast();
@@ -108,43 +193,30 @@ function ScreenRecorderTab() {
   const animRef = useRef<number | null>(null);
 
   const fmt = (s: number) =>
-    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(Math.abs(s) % 60)).padStart(2, "0")}`;
+    `${String(Math.floor(Math.abs(s) / 60)).padStart(2, "0")}:${String(Math.floor(Math.abs(s) % 60)).padStart(2, "0")}`;
 
-  // Detect trim support
   useEffect(() => {
-    const v = document.createElement("video");
-    setTrimSupported("captureStream" in v);
+    setTrimSupported("captureStream" in document.createElement("video"));
+    return cleanup;
   }, []);
 
-  // Attach live stream to preview via useEffect (avoids race with DOM)
   useEffect(() => {
     const video = previewRef.current;
     if (!video) return;
-    if (liveStream) {
-      video.srcObject = liveStream;
-      video.play().catch(() => {});
-    } else {
-      video.srcObject = null;
-    }
+    if (liveStream) { video.srcObject = liveStream; video.play().catch(() => {}); }
+    else video.srcObject = null;
   }, [liveStream]);
-
-  useEffect(() => () => { cleanup(); }, []);
 
   const cleanup = () => {
     screenStreamRef.current?.getTracks().forEach(t => t.stop());
     camStreamRef.current?.getTracks().forEach(t => t.stop());
-    screenStreamRef.current = null;
-    camStreamRef.current = null;
+    screenStreamRef.current = null; camStreamRef.current = null;
     if (timerRef.current) clearInterval(timerRef.current);
     if (animRef.current) cancelAnimationFrame(animRef.current);
   };
 
   const waitForReady = (v: HTMLVideoElement) =>
-    new Promise<void>(res => {
-      if (v.readyState >= 2) return res();
-      v.addEventListener("loadeddata", () => res(), { once: true });
-      setTimeout(res, 2500);
-    });
+    new Promise<void>(r => { if (v.readyState >= 2) r(); else { v.addEventListener("loadeddata", () => r(), { once: true }); setTimeout(r, 2500); } });
 
   const startRecording = async () => {
     try {
@@ -155,78 +227,52 @@ function ScreenRecorderTab() {
       if (mode === "screen") {
         const screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
         screenStreamRef.current = screen;
-
         if (micEnabled) {
           try {
             const mic = await navigator.mediaDevices.getUserMedia({ audio: audioCfg, video: false });
-            const actx = new AudioContext();
-            const dest = actx.createMediaStreamDestination();
+            const actx = new AudioContext(), dest = actx.createMediaStreamDestination();
             if (screen.getAudioTracks().length) actx.createMediaStreamSource(screen).connect(dest);
             actx.createMediaStreamSource(mic).connect(dest);
             recordStream = new MediaStream([...screen.getVideoTracks(), ...dest.stream.getTracks()]);
-          } catch {
-            recordStream = screen;
-          }
-        } else {
-          recordStream = screen;
-        }
+          } catch { recordStream = screen; }
+        } else { recordStream = screen; }
         setLiveStream(recordStream);
         screen.getVideoTracks()[0]?.addEventListener("ended", doStop);
 
       } else if (mode === "camera") {
-        const cam = await navigator.mediaDevices.getUserMedia({
-          video: { width: 1280, height: 720, frameRate: 30 },
-          audio: audioCfg,
-        });
+        const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: audioCfg });
         camStreamRef.current = cam;
         recordStream = cam;
         setLiveStream(cam);
 
       } else {
-        // Screen + Camera PiP via canvas
         const screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
-        const cam = await navigator.mediaDevices.getUserMedia({
-          video: { width: 320, height: 240, facingMode: "user" },
-          audio: audioCfg,
-        });
-        screenStreamRef.current = screen;
-        camStreamRef.current = cam;
+        const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: audioCfg });
+        screenStreamRef.current = screen; camStreamRef.current = cam;
 
         const sv = Object.assign(document.createElement("video"), { srcObject: screen, muted: true, autoplay: true, playsInline: true });
         const cv = Object.assign(document.createElement("video"), { srcObject: cam, muted: true, autoplay: true, playsInline: true });
-
         await Promise.all([sv.play(), cv.play()]);
         await Promise.all([waitForReady(sv), waitForReady(cv)]);
 
-        const canvas = document.createElement("canvas");
-        canvas.width = 1280; canvas.height = 720;
+        const canvas = document.createElement("canvas"); canvas.width = 1280; canvas.height = 720;
         const ctx = canvas.getContext("2d")!;
-
-        // Draw initial frame so stream isn't black
         ctx.drawImage(sv, 0, 0, 1280, 720);
 
-        const pip = { r: 110, mx: 1280 - 110 - 16, my: 720 - 110 - 16 };
+        const pip = { r: 110, mx: 1280 - 126, my: 720 - 126 };
         const draw = () => {
           ctx.drawImage(sv, 0, 0, 1280, 720);
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(pip.mx, pip.my, pip.r, 0, Math.PI * 2);
-          ctx.clip();
-          ctx.drawImage(cv, pip.mx - pip.r, pip.my - pip.r, pip.r * 2, pip.r * 2);
-          ctx.restore();
-          ctx.beginPath();
-          ctx.arc(pip.mx, pip.my, pip.r + 2, 0, Math.PI * 2);
-          ctx.strokeStyle = "rgba(255,255,255,0.85)";
-          ctx.lineWidth = 3;
-          ctx.stroke();
+          ctx.save(); ctx.beginPath(); ctx.arc(pip.mx, pip.my, pip.r, 0, Math.PI * 2); ctx.clip();
+          ctx.drawImage(cv, pip.mx - pip.r, pip.my - pip.r, pip.r * 2, pip.r * 2); ctx.restore();
+          ctx.beginPath(); ctx.arc(pip.mx, pip.my, pip.r + 2, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 3; ctx.stroke();
           animRef.current = requestAnimationFrame(draw);
         };
         draw();
 
         const audioTracks: MediaStreamTrack[] = [];
         try {
-          const actx = new AudioContext();
-          const dest = actx.createMediaStreamDestination();
+          const actx = new AudioContext(), dest = actx.createMediaStreamDestination();
           if (screen.getAudioTracks().length) actx.createMediaStreamSource(screen).connect(dest);
           if (cam.getAudioTracks().length) actx.createMediaStreamSource(cam).connect(dest);
           audioTracks.push(...dest.stream.getTracks());
@@ -239,7 +285,6 @@ function ScreenRecorderTab() {
 
       const mimeType = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
         .find(m => MediaRecorder.isTypeSupported(m)) ?? "video/webm";
-
       const recorder = new MediaRecorder(recordStream, { mimeType });
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
@@ -247,18 +292,11 @@ function ScreenRecorderTab() {
         if (animRef.current) cancelAnimationFrame(animRef.current);
         const blob = new Blob(chunksRef.current, { type: "video/webm" });
         setVideoUrl(URL.createObjectURL(blob));
-        setTrimStart(0);
-        setTrimEnd(0);
-        setShowTrimmer(false);
-        setLiveStream(null);
-        cleanup();
+        setTrimStart(0); setTrimEnd(0); setShowTrimmer(false); setLiveStream(null); cleanup();
         setRecordState("done");
       };
-
       recorder.start(100);
-      setRecordState("recording");
-      setElapsed(0);
-      setVideoUrl(null);
+      setRecordState("recording"); setElapsed(0); setVideoUrl(null);
       timerRef.current = setInterval(() => setElapsed(p => p + 1), 1000);
 
     } catch (err: unknown) {
@@ -274,9 +312,6 @@ function ScreenRecorderTab() {
     if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
   }
 
-  const pauseRecording = () => { mediaRecorderRef.current?.pause(); if (timerRef.current) clearInterval(timerRef.current); setRecordState("paused"); };
-  const resumeRecording = () => { mediaRecorderRef.current?.resume(); timerRef.current = setInterval(() => setElapsed(p => p + 1), 1000); setRecordState("recording"); };
-
   const downloadFull = () => {
     if (!videoUrl) return;
     const a = document.createElement("a");
@@ -286,73 +321,48 @@ function ScreenRecorderTab() {
     toast({ title: "Downloading…" });
   };
 
-  // Trim: dedicated off-screen video element with proper load/seek before captureStream
   const downloadTrimmed = async () => {
     if (!videoUrl || !trimSupported) return;
     setIsTrimming(true);
     try {
-      // Create a fresh video element specifically for trim capture
       const cap = document.createElement("video");
-      cap.src = videoUrl;
-      cap.preload = "auto";
-
-      // Load metadata and wait for the video to be ready
-      await new Promise<void>((resolve, reject) => {
-        cap.onloadedmetadata = () => resolve();
-        cap.onerror = () => reject(new Error("Video failed to load"));
-        cap.load();
-        setTimeout(() => reject(new Error("Load timeout")), 10000);
+      cap.src = videoUrl; cap.preload = "auto";
+      await new Promise<void>((res, rej) => {
+        cap.onloadedmetadata = () => res();
+        cap.onerror = () => rej(new Error("Load failed"));
+        cap.load(); setTimeout(() => rej(new Error("Load timeout")), 10000);
       });
-
-      // Seek to trim start
       cap.currentTime = trimStart;
-      await new Promise<void>((resolve, reject) => {
-        cap.onseeked = () => resolve();
-        cap.onerror = () => reject(new Error("Seek failed"));
-        setTimeout(() => reject(new Error("Seek timeout")), 5000);
+      await new Promise<void>((res, rej) => {
+        cap.onseeked = () => res();
+        cap.onerror = () => rej(new Error("Seek failed"));
+        setTimeout(() => rej(new Error("Seek timeout")), 5000);
       });
 
-      // Now captureStream — must be called AFTER seek is complete
-      type CaptureVideo = HTMLVideoElement & { captureStream(): MediaStream };
-      const stream = (cap as CaptureVideo).captureStream();
-
+      type CapVid = HTMLVideoElement & { captureStream(): MediaStream };
+      const stream = (cap as CapVid).captureStream();
       const mimeType = ["video/webm;codecs=vp9,opus", "video/webm"].find(m => MediaRecorder.isTypeSupported(m)) ?? "video/webm";
       const recorder = new MediaRecorder(stream, { mimeType });
       const chunks: Blob[] = [];
-
       recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
       recorder.onstop = () => {
         cap.pause();
         const blob = new Blob(chunks, { type: "video/webm" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${recordingName || "tymflo"}-trimmed-${fmt(trimStart)}-${fmt(trimEnd)}.webm`;
-        a.click();
+        const a = document.createElement("a"); a.href = url;
+        a.download = `${recordingName || "tymflo"}-trimmed.webm`; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
         setIsTrimming(false);
         toast({ title: "Trimmed clip downloaded!" });
       };
-
       recorder.start(100);
       await cap.play();
-
-      // Poll every 80ms to stop at trim end
       const poll = setInterval(() => {
-        if (cap.currentTime >= trimEnd) {
-          clearInterval(poll);
-          recorder.stop();
-        }
+        if (cap.currentTime >= trimEnd) { clearInterval(poll); recorder.stop(); }
       }, 80);
-
     } catch (e) {
       setIsTrimming(false);
-      const msg = e instanceof Error ? e.message : "";
-      toast({
-        title: "Trim export failed",
-        description: msg.includes("timeout") ? "Video took too long to load. Try downloading the full recording." : "Your browser may not support trim export. Use Chrome or Edge.",
-        variant: "destructive",
-      });
+      toast({ title: "Trim failed", description: "Use Chrome or Edge for trim export.", variant: "destructive" });
     }
   };
 
@@ -363,7 +373,7 @@ function ScreenRecorderTab() {
   };
 
   const modes = [
-    { id: "screen" as RecordMode, label: "Screen Only", Icon: Monitor, desc: "Your full screen or a browser tab" },
+    { id: "screen" as RecordMode, label: "Screen Only", Icon: Monitor, desc: "Full screen or a browser tab" },
     { id: "camera" as RecordMode, label: "Camera Only", Icon: Camera, desc: "Webcam recording" },
     { id: "screen+camera" as RecordMode, label: "Screen + Camera", Icon: Layers, desc: "Screen with webcam circle overlay" },
   ];
@@ -379,13 +389,8 @@ function ScreenRecorderTab() {
                 <button key={id} data-testid={`mode-${id}`} onClick={() => setMode(id)}
                   className={`relative flex flex-col gap-3 p-4 rounded-xl border-2 text-left transition-all ${mode === id ? "border-[#463176] bg-[#463176]/5" : "border-gray-200 hover:border-gray-300"}`}>
                   {mode === id && <CheckCircle className="absolute top-3 right-3 w-4 h-4 text-[#463176]" />}
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${mode === id ? "bg-[#463176] text-white" : "bg-gray-100 text-gray-500"}`}>
-                    <Icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-gray-900 text-sm">{label}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">{desc}</div>
-                  </div>
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${mode === id ? "bg-[#463176] text-white" : "bg-gray-100 text-gray-500"}`}><Icon className="w-5 h-5" /></div>
+                  <div><div className="font-semibold text-gray-900 text-sm">{label}</div><div className="text-xs text-gray-500 mt-0.5">{desc}</div></div>
                 </button>
               ))}
             </div>
@@ -425,8 +430,8 @@ function ScreenRecorderTab() {
           </div>
           <div className="p-4 flex items-center justify-center gap-3 bg-gray-50">
             {recordState === "recording"
-              ? <Button variant="outline" onClick={pauseRecording} data-testid="button-pause" className="gap-2"><Pause className="w-4 h-4" /> Pause</Button>
-              : <Button variant="outline" onClick={resumeRecording} data-testid="button-resume" className="gap-2"><Play className="w-4 h-4" /> Resume</Button>}
+              ? <Button variant="outline" onClick={() => { mediaRecorderRef.current?.pause(); if (timerRef.current) clearInterval(timerRef.current); setRecordState("paused"); }} data-testid="button-pause" className="gap-2"><Pause className="w-4 h-4" /> Pause</Button>
+              : <Button variant="outline" onClick={() => { mediaRecorderRef.current?.resume(); timerRef.current = setInterval(() => setElapsed(p => p + 1), 1000); setRecordState("recording"); }} data-testid="button-resume" className="gap-2"><Play className="w-4 h-4" /> Resume</Button>}
             <Button onClick={doStop} data-testid="button-stop" className="bg-red-500 hover:bg-red-600 text-white gap-2">
               <Square className="w-4 h-4 fill-white" /> Stop
             </Button>
@@ -435,95 +440,86 @@ function ScreenRecorderTab() {
       )}
 
       {recordState === "done" && videoUrl && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border overflow-hidden">
-            <div className="bg-gray-950 aspect-video">
-              <video ref={playbackRef} src={videoUrl} controls className="w-full h-full object-contain" data-testid="video-playback"
-                onLoadedMetadata={e => {
-                  const dur = (e.target as HTMLVideoElement).duration;
-                  if (isFinite(dur)) { setVideoDuration(dur); setTrimEnd(dur); }
-                }} />
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="bg-gray-950 aspect-video">
+            <video ref={playbackRef} src={videoUrl} controls className="w-full h-full object-contain" data-testid="video-playback"
+              onLoadedMetadata={e => {
+                const dur = (e.target as HTMLVideoElement).duration;
+                if (isFinite(dur)) { setVideoDuration(dur); setTrimEnd(dur); }
+              }} />
+          </div>
+
+          <div className="p-5 space-y-5">
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Recording name</label>
+              <Input placeholder="my-screen-recording" value={recordingName} onChange={e => setRecordingName(e.target.value)} data-testid="input-recording-name" className="max-w-sm" />
             </div>
 
-            <div className="p-5 space-y-5">
-              <div>
-                <label className="text-sm font-medium text-gray-700 block mb-1">Recording name</label>
-                <Input placeholder="my-screen-recording" value={recordingName}
-                  onChange={e => setRecordingName(e.target.value)} data-testid="input-recording-name" className="max-w-sm" />
-              </div>
-
-              {/* Trim editor */}
-              <div className="border rounded-xl overflow-hidden">
-                <button onClick={() => setShowTrimmer(!showTrimmer)} data-testid="button-toggle-trimmer"
-                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors">
-                  <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                    <Scissors className="w-4 h-4 text-[#463176]" /> Trim Clip
-                  </div>
-                  <span className="text-xs text-gray-400">{showTrimmer ? "Hide" : "Show"}</span>
-                </button>
-
-                {showTrimmer && (
-                  <div className="px-5 pb-5 pt-4 border-t space-y-4 bg-gray-50">
-                    {!trimSupported && (
-                      <div className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
-                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                        Trim export requires Chrome or Edge. Download the full recording and use a video editor for trimming in other browsers.
+            {/* Trim */}
+            <div className="border rounded-xl overflow-hidden">
+              <button onClick={() => setShowTrimmer(!showTrimmer)} data-testid="button-toggle-trimmer"
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors">
+                <div className="flex items-center gap-2 text-sm font-medium text-gray-700"><Scissors className="w-4 h-4 text-[#463176]" /> Trim Clip</div>
+                <span className="text-xs text-gray-400">{showTrimmer ? "Hide" : "Show"}</span>
+              </button>
+              {showTrimmer && (
+                <div className="px-5 pb-5 pt-4 border-t space-y-4 bg-gray-50">
+                  {!trimSupported && (
+                    <div className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" /> Trim export requires Chrome or Edge.
+                    </div>
+                  )}
+                  {videoDuration > 0 && (
+                    <>
+                      <div className="flex gap-4 text-sm text-gray-500">
+                        <span>Full: <strong className="text-gray-800">{fmt(videoDuration)}</strong></span>
+                        <span>Trimmed: <strong className="text-[#463176]">{fmt(trimEnd - trimStart)}</strong></span>
                       </div>
-                    )}
-
-                    {videoDuration > 0 && (
-                      <>
-                        <div className="flex gap-4 text-sm text-gray-500">
-                          <span>Full: <strong className="text-gray-800">{fmt(videoDuration)}</strong></span>
-                          <span>Selection: <strong className="text-[#463176]">{fmt(trimEnd - trimStart)}</strong></span>
+                      <div className="relative h-8 bg-gray-200 rounded-lg overflow-hidden">
+                        <div className="absolute top-0 h-full bg-[#463176]/20 border-x-2 border-[#463176]"
+                          style={{ left: `${(trimStart / videoDuration) * 100}%`, width: `${((trimEnd - trimStart) / videoDuration) * 100}%` }} />
+                        <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 font-mono pointer-events-none">
+                          {fmt(trimStart)} → {fmt(trimEnd)}
                         </div>
-
-                        {/* Visual timeline */}
-                        <div className="relative h-8 bg-gray-200 rounded-lg overflow-hidden">
-                          <div
-                            className="absolute top-0 h-full bg-[#463176]/20 border-x-2 border-[#463176]"
-                            style={{ left: `${(trimStart / videoDuration) * 100}%`, width: `${((trimEnd - trimStart) / videoDuration) * 100}%` }}
-                          />
-                          <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 font-mono pointer-events-none">
-                            {fmt(trimStart)} → {fmt(trimEnd)}
-                          </div>
+                      </div>
+                      {[["Start", trimStart, (v: number) => { if (v < trimEnd - 0.5) { setTrimStart(v); if (playbackRef.current) playbackRef.current.currentTime = v; } }, "slider-trim-start"],
+                        ["End", trimEnd, (v: number) => { if (v > trimStart + 0.5) setTrimEnd(v); }, "slider-trim-end"]].map(([label, val, onChange, tid]) => (
+                        <div key={tid as string} className="flex items-center gap-3">
+                          <label className="text-xs font-medium text-gray-500 w-10 shrink-0">{label as string}</label>
+                          <input type="range" min={0} max={videoDuration} step={0.1} value={val as number}
+                            onChange={e => (onChange as (v: number) => void)(parseFloat(e.target.value))}
+                            className="flex-1 accent-[#463176]" data-testid={tid as string} />
+                          <span className="text-xs font-mono text-gray-600 w-10 text-right">{fmt(val as number)}</span>
                         </div>
-
-                        <div className="space-y-3">
-                          {[["Start", trimStart, (v: number) => { if (v < trimEnd - 0.5) { setTrimStart(v); if (playbackRef.current) playbackRef.current.currentTime = v; } }, "slider-trim-start"],
-                            ["End", trimEnd, (v: number) => { if (v > trimStart + 0.5) setTrimEnd(v); }, "slider-trim-end"]].map(([label, val, onChange, tid]) => (
-                            <div key={tid as string} className="flex items-center gap-3">
-                              <label className="text-xs font-medium text-gray-500 w-10 shrink-0">{label as string}</label>
-                              <input type="range" min={0} max={videoDuration} step={0.1} value={val as number}
-                                onChange={e => (onChange as (v: number) => void)(parseFloat(e.target.value))}
-                                className="flex-1 accent-[#463176]" data-testid={tid as string} />
-                              <span className="text-xs font-mono text-gray-600 w-10 text-right">{fmt(val as number)}</span>
-                            </div>
-                          ))}
-                        </div>
-
-                        <Button onClick={downloadTrimmed} disabled={isTrimming || !trimSupported} data-testid="button-download-trimmed"
-                          className="gap-2 bg-[#463176] hover:bg-[#5a3f91]">
-                          <Download className="w-4 h-4" />
-                          {isTrimming ? "Exporting… (plays in real-time)" : `Export Trimmed Clip (${fmt(trimEnd - trimStart)})`}
-                        </Button>
-                        {isTrimming && <p className="text-xs text-gray-400">The clip plays through once to generate the export — this takes as long as the clip duration.</p>}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-3 flex-wrap">
-                <Button onClick={downloadFull} data-testid="button-download" className="gap-2 bg-[#463176] hover:bg-[#5a3f91]">
-                  <Download className="w-4 h-4" /> Download Full (.webm)
-                </Button>
-                <Button variant="outline" onClick={reset} data-testid="button-new-recording" className="gap-2">
-                  <RotateCcw className="w-4 h-4" /> New Recording
-                </Button>
-              </div>
-              <p className="text-xs text-gray-400">Nothing is uploaded — recordings stay on your device.</p>
+                      ))}
+                      <Button onClick={downloadTrimmed} disabled={isTrimming || !trimSupported} data-testid="button-download-trimmed" className="gap-2 bg-[#463176] hover:bg-[#5a3f91]">
+                        <Download className="w-4 h-4" />
+                        {isTrimming ? "Exporting… (plays in real-time)" : `Export Trimmed (${fmt(trimEnd - trimStart)})`}
+                      </Button>
+                      {isTrimming && <p className="text-xs text-gray-400">Takes as long as the clip duration — plays through once to encode.</p>}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
+
+            {/* Library tip */}
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-700 flex gap-3">
+              <FolderOpen className="w-5 h-5 shrink-0 mt-0.5" />
+              <div>
+                <strong>Video Library:</strong> Download your recording and save it to a folder on your computer or Google Drive. Videos are too large to store in the browser — downloading is the right approach.
+              </div>
+            </div>
+
+            <div className="flex gap-3 flex-wrap">
+              <Button onClick={downloadFull} data-testid="button-download" className="gap-2 bg-[#463176] hover:bg-[#5a3f91]">
+                <Download className="w-4 h-4" /> Download Full (.webm)
+              </Button>
+              <Button variant="outline" onClick={reset} data-testid="button-new-recording" className="gap-2">
+                <RotateCcw className="w-4 h-4" /> New Recording
+              </Button>
+            </div>
+            <p className="text-xs text-gray-400">Nothing is uploaded — recordings stay on your device.</p>
           </div>
         </div>
       )}
@@ -531,105 +527,92 @@ function ScreenRecorderTab() {
   );
 }
 
-// ─── Process Guide ───────────────────────────────────────────────────────────
+// ─── Process Guide Tab ────────────────────────────────────────────────────────
 
-function ProcessGuideTab() {
+function ProcessGuideTab({
+  importedSteps,
+  importedTitle,
+  onImportConsumed,
+}: {
+  importedSteps: ProcessStep[] | null;
+  importedTitle: string;
+  onImportConsumed: () => void;
+}) {
   const { toast } = useToast();
   const [steps, setSteps] = useState<ProcessStep[]>([]);
   const [guideTitle, setGuideTitle] = useState("");
   const [capturing, setCapturing] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
-  const [importBanner, setImportBanner] = useState<{ count: number } | null>(null);
+  const [importBanner, setImportBanner] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [savedGuides, setSavedGuides] = useState<SavedGuide[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
   const idRef = useRef(0);
 
-  // Listen for steps sent from the bookmarklet via postMessage
-  useEffect(() => {
-    const handler = (e: MessageEvent) => {
-      if (e.data?.type === "tymflo_import" && Array.isArray(e.data.steps)) {
-        const incoming = e.data.steps as ProcessStep[];
-        setSteps(incoming);
-        if (e.data.title) setGuideTitle(e.data.title);
-        setImportBanner({ count: incoming.length });
-        setExpandedStep(incoming[0]?.id ?? null);
-      }
-    };
-    window.addEventListener("message", handler);
-    // Signal to bookmarklet that TymFlo Hub is ready
-    if (window.opener) window.opener.postMessage({ type: "tymflo_ready" }, "*");
-    return () => window.removeEventListener("message", handler);
-  }, []);
-
-  // Generate bookmarklet href dynamically so it works on both Replit & GitHub Pages
   const tymfloUrl = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, "")}`;
 
-  const bookmarkletCode = `javascript:(function(){
-if(window.__tf){window.__tf.stop();return;}
-var steps=[],s=null,vid=null,tWin=null;
-var ui=document.createElement('div');
-ui.style='position:fixed;bottom:16px;right:16px;background:#463176;color:#fff;padding:14px 16px;border-radius:14px;z-index:2147483647;font:13px/1.5 system-ui,sans-serif;width:210px;box-shadow:0 8px 32px rgba(0,0,0,.45);user-select:none';
-ui.innerHTML='<div style="font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between"><span>TymFlo Capture</span><span id="__tf_n" style="background:rgba(255,255,255,.2);padding:1px 8px;border-radius:20px;font-size:11px;font-weight:400">0 steps</span></div><div id="__tf_s" style="font-size:11px;opacity:.7;margin-bottom:10px;min-height:16px">Ready – click Capture to start</div><button id="__tf_c" style="width:100%;background:#fff;color:#463176;border:none;padding:8px;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;margin-bottom:6px">Capture Step</button><button id="__tf_d" style="width:100%;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:8px;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Done \u2192 Send to TymFlo</button>';
-document.body.appendChild(ui);
-function upd(){document.getElementById('__tf_n').textContent=steps.length+' step'+(steps.length!==1?'s':'');}
-function setStatus(t){document.getElementById('__tf_s').textContent=t;}
-async function cap(){
-  setStatus('Taking screenshot\u2026');
-  var flash=document.createElement('div');
-  flash.style='position:fixed;inset:0;background:#fff;opacity:.5;z-index:2147483646;pointer-events:none';
-  document.body.appendChild(flash);setTimeout(()=>flash.remove(),180);
-  var shot='';
-  try{
-    if(!s||s.getTracks()[0].readyState==='ended'){
-      setStatus('Select screen to share\u2026');
-      s=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:5},audio:false});
-      vid=document.createElement('video');vid.srcObject=s;vid.muted=true;vid.playsInline=true;
-      await vid.play();await new Promise(r=>setTimeout(r,700));
+  // Simplified bookmarklet — just opens the persistent popup
+  const bookmarkletCode = `javascript:(function(){var u='${tymfloUrl}/capture-popup.html';var f='width=290,height=460,popup=yes,left='+(screen.availWidth-305)+',top=50';var w=window.open(u,'tymflo_cap',f);if(!w)alert('Allow popups for this site to use TymFlo Capture (check address bar).');})();`;
+
+  // Receive imported steps from parent
+  useEffect(() => {
+    if (importedSteps && importedSteps.length > 0) {
+      setSteps(importedSteps);
+      if (importedTitle) setGuideTitle(importedTitle);
+      setImportBanner(true);
+      setExpandedStep(importedSteps[0]?.id ?? null);
+      onImportConsumed();
+      toast({ title: `${importedSteps.length} steps imported from capture session!` });
     }
-    if(vid&&vid.readyState>=2){
-      var c=document.createElement('canvas');c.width=vid.videoWidth;c.height=vid.videoHeight;
-      c.getContext('2d').drawImage(vid,0,0);shot=c.toDataURL('image/jpeg',.72);
-    }
-  }catch(e){setStatus('Screenshot skipped');}
-  var id=Date.now()+'';
-  steps.push({id:id,title:'Step '+(steps.length+1)+' \u2013 '+document.title,description:location.href,screenshot:shot});
-  upd();setStatus('Step '+(steps.length)+' captured! Click to add another.');
-}
-document.getElementById('__tf_c').onclick=cap;
-document.getElementById('__tf_d').onclick=function(){
-  if(!steps.length){setStatus('Capture at least 1 step first.');return;}
-  tWin=window.open('${tymfloUrl}/');
-  setStatus('Opening TymFlo\u2026 sending steps.');
-  var h=function(e){
-    if(e.data&&e.data.type==='tymflo_ready'){
-      window.removeEventListener('message',h);
-      tWin.postMessage({type:'tymflo_import',steps:steps,title:document.title},'*');
+  }, [importedSteps]);
+
+  const loadLibrary = async () => {
+    setLibraryLoading(true);
+    try { setSavedGuides(await dbLoadAll()); } catch { /* ignore */ }
+    setLibraryLoading(false);
+  };
+
+  const saveToLibrary = async () => {
+    if (!steps.length) { toast({ title: "No steps to save", variant: "destructive" }); return; }
+    try {
+      await dbSave(guideTitle, steps);
+      toast({ title: "Guide saved to library!" });
+      if (showLibrary) loadLibrary();
+    } catch {
+      toast({ title: "Save failed", description: "Browser storage error", variant: "destructive" });
     }
   };
-  window.addEventListener('message',h);
-  setTimeout(()=>window.removeEventListener('message',h),60000);
-  document.body.removeChild(ui);if(s)s.getTracks().forEach(t=>t.stop());delete window.__tf;
-};
-window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().forEach(t=>t.stop());delete window.__tf;}};
-})();`.replace(/\n/g, "");
+
+  const loadGuide = (g: SavedGuide) => {
+    setSteps(g.steps);
+    setGuideTitle(g.title);
+    setShowLibrary(false);
+    setExpandedStep(g.steps[0]?.id ?? null);
+    toast({ title: "Guide loaded!" });
+  };
+
+  const deleteGuide = async (id: string) => {
+    await dbDelete(id);
+    setSavedGuides(prev => prev.filter(g => g.id !== id));
+  };
 
   const capture = async () => {
     setCountdown(3);
-    await new Promise<void>(resolve => {
+    await new Promise<void>(res => {
       let c = 3;
-      const t = setInterval(() => { c--; setCountdown(c); if (c <= 0) { clearInterval(t); resolve(); } }, 1000);
+      const t = setInterval(() => { c--; setCountdown(c); if (c <= 0) { clearInterval(t); res(); } }, 1000);
     });
     setCapturing(true);
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       const track = stream.getVideoTracks()[0];
-
       let dataUrl = "";
       try {
         type IC = { grabFrame(): Promise<ImageBitmap> };
         const IC = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => IC }).ImageCapture;
         if (IC) {
-          const bitmap = await new IC(track).grabFrame();
-          track.stop();
+          const bitmap = await new IC(track).grabFrame(); track.stop();
           const canvas = document.createElement("canvas");
           canvas.width = bitmap.width; canvas.height = bitmap.height;
           canvas.getContext("2d")!.drawImage(bitmap, 0, 0);
@@ -645,12 +628,8 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
         dataUrl = canvas.toDataURL("image/jpeg", 0.82);
         stream.getTracks().forEach(t => t.stop());
       }
-
       const id = String(++idRef.current);
-      setSteps(prev => {
-        const n = prev.length + 1;
-        return [...prev, { id, screenshot: dataUrl, title: `Step ${n}`, description: "" }];
-      });
+      setSteps(prev => [...prev, { id, screenshot: dataUrl, title: `Step ${prev.length + 1}`, description: "" }]);
       setExpandedStep(id);
       toast({ title: "Step captured" });
     } catch (err: unknown) {
@@ -667,7 +646,7 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
   const remove = (id: string) => {
     setSteps(prev => {
       const next = prev.filter(s => s.id !== id);
-      return next.map((s, i) => ({ ...s, title: s.title.match(/^Step \d+/) ? `Step ${i + 1}` : s.title }));
+      return next.map((s, i) => ({ ...s, title: s.title.match(/^Step \d+$/) ? `Step ${i + 1}` : s.title }));
     });
     if (expandedStep === id) setExpandedStep(null);
   };
@@ -677,19 +656,103 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
       const i = prev.findIndex(s => s.id === id);
       if ((dir === "up" && i === 0) || (dir === "down" && i === prev.length - 1)) return prev;
       const n = [...prev], j = dir === "up" ? i - 1 : i + 1;
-      [n[i], n[j]] = [n[j], n[i]];
-      return n;
+      [n[i], n[j]] = [n[j], n[i]]; return n;
     });
 
+  // HTML export with Tango-style hover magnifier
   const exportHTML = () => {
     if (!steps.length) { toast({ title: "No steps yet", variant: "destructive" }); return; }
     const title = guideTitle || "Process Guide";
-    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${title}</title><style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8f9fa;margin:0;color:#111}.hdr{background:linear-gradient(135deg,#463176,#6b4fa8);color:#fff;padding:48px 24px;text-align:center}.hdr h1{margin:0 0 8px;font-size:2rem;font-weight:700}.hdr p{margin:0;opacity:.75}.body{max-width:800px;margin:0 auto;padding:40px 24px}.step{background:#fff;border-radius:12px;margin-bottom:24px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)}.sh{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid #f0f0f0}.sn{width:34px;height:34px;border-radius:50%;background:#463176;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}.st{font-weight:600;font-size:.95rem}.si{width:100%;display:block}.sd{padding:14px 20px;font-size:.92rem;color:#4b5563;line-height:1.7}footer{text-align:center;padding:32px;color:#9ca3af;font-size:.8rem}footer a{color:#463176}</style></head><body><div class="hdr"><h1>${title}</h1><p>${steps.length} steps &middot; ${new Date().toLocaleDateString()}</p></div><div class="body">${steps.map((s, i) => `<div class="step"><div class="sh"><div class="sn">${i + 1}</div><div class="st">${s.title}</div></div>${s.screenshot ? `<img class="si" src="${s.screenshot}" alt="${s.title}"/>` : ""}${s.description ? `<div class="sd">${s.description.replace(/\n/g, "<br/>")}</div>` : ""}</div>`).join("")}</div><footer>Created with <a href="${tymfloUrl}/">TymFlo Hub</a></footer></body></html>`;
+
+    const magnifierJS = `<script>(function(){
+  var mag=null,magImg=null;
+  function ensureMag(){
+    if(mag)return;
+    mag=document.createElement('div');
+    mag.style.cssText='position:fixed;pointer-events:none;z-index:9999;border-radius:12px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.55);border:2px solid #463176;width:420px;height:270px;display:none;background:#000';
+    magImg=document.createElement('img');
+    magImg.style.cssText='position:absolute;transform-origin:top left;max-width:none;max-height:none;';
+    mag.appendChild(magImg);
+    document.body.appendChild(mag);
+  }
+  document.querySelectorAll('.step-img').forEach(function(img){
+    img.style.cursor='zoom-in';
+    img.title='Hover to zoom';
+    img.addEventListener('mouseenter',function(){
+      ensureMag();
+      magImg.src=this.src;
+      mag.style.display='block';
+    });
+    img.addEventListener('mouseleave',function(){if(mag)mag.style.display='none';});
+    img.addEventListener('mousemove',function(e){
+      if(!mag||!magImg.naturalWidth)return;
+      var r=this.getBoundingClientRect();
+      var xp=(e.clientX-r.left)/r.width;
+      var yp=(e.clientY-r.top)/r.height;
+      var sc=2.8,ow=420,oh=270;
+      var nw=magImg.naturalWidth*sc,nh=magImg.naturalHeight*sc;
+      magImg.style.width=nw+'px';magImg.style.height=nh+'px';
+      magImg.style.left=Math.min(0,-(xp*nw-ow/2))+'px';
+      magImg.style.top=Math.min(0,-(yp*nh-oh/2))+'px';
+      var mx=e.clientX+28,my=e.clientY-135;
+      if(mx+420>window.innerWidth)mx=e.clientX-448;
+      if(my<8)my=8;
+      if(my+270>window.innerHeight-8)my=window.innerHeight-278;
+      mag.style.left=mx+'px';mag.style.top=my+'px';
+    });
+    img.addEventListener('click',function(){
+      var w=window.open('','_blank');
+      w.document.write('<html><body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+this.src+'" style="max-width:100%;max-height:100vh;object-fit:contain"></body></html>');
+    });
+  });
+})();<\/script>`;
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${title}</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f7;margin:0;color:#1a1a2e}
+.hdr{background:linear-gradient(135deg,#463176,#6b4fa8);color:#fff;padding:48px 24px;text-align:center}
+.hdr h1{margin:0 0 8px;font-size:2rem;font-weight:700}
+.hdr p{margin:0;opacity:.75;font-size:.95rem}
+.body{max-width:820px;margin:0 auto;padding:40px 24px}
+.step{background:#fff;border-radius:14px;margin-bottom:28px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.sh{display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid #f0f0f0;background:#fafafa}
+.sn{width:36px;height:36px;border-radius:50%;background:#463176;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0}
+.st{font-weight:600;font-size:1rem;color:#1a1a2e}
+.si{width:100%;display:block;cursor:zoom-in;transition:opacity .15s}
+.si:hover{opacity:.97}
+.sd{padding:16px 22px;font-size:.93rem;color:#4b5563;line-height:1.7;white-space:pre-wrap}
+.zoom-hint{padding:6px 22px 0;font-size:11px;color:#9ca3af;font-style:italic}
+footer{text-align:center;padding:36px;color:#9ca3af;font-size:.8rem}
+footer a{color:#463176;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>${title}</h1>
+  <p>${steps.length} steps &middot; ${new Date().toLocaleDateString()}</p>
+</div>
+<div class="body">
+${steps.map((s, i) => `<div class="step">
+  <div class="sh"><div class="sn">${i + 1}</div><div class="st">${s.title}</div></div>
+  ${s.screenshot ? `<div class="zoom-hint">Hover over image to zoom in &middot; Click to open full size</div><img class="step-img" src="${s.screenshot}" alt="${s.title}" style="display:block;width:100%"/>` : ""}
+  ${s.description ? `<div class="sd">${s.description.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>` : ""}
+</div>`).join("\n")}
+</div>
+<footer>Created with <a href="${tymfloUrl}/">TymFlo Hub</a></footer>
+${magnifierJS}
+</body>
+</html>`;
+
     const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `${guideTitle || "process-guide"}.html`; a.click();
     URL.revokeObjectURL(url);
-    toast({ title: "Exported as HTML!" });
+    toast({ title: "Exported! Hover over screenshots to zoom in." });
   };
 
   const copyMarkdown = () => {
@@ -704,74 +767,61 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
       {importBanner && (
         <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
           <CheckCircle className="w-5 h-5 text-green-600 shrink-0" />
-          <div className="flex-1 text-sm text-green-800">
-            <strong>{importBanner.count} steps imported</strong> from your bookmarklet session. Review and edit them below.
-          </div>
-          <button onClick={() => setImportBanner(null)} className="text-green-600 text-xs hover:underline">Dismiss</button>
+          <div className="flex-1 text-sm text-green-800"><strong>Steps imported!</strong> Review and edit them below, then export your guide.</div>
+          <button onClick={() => setImportBanner(false)} className="text-green-600 hover:text-green-800"><X className="w-4 h-4" /></button>
         </div>
       )}
 
       {/* Bookmarklet installer */}
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="px-6 pt-5 pb-4 border-b bg-gradient-to-r from-[#463176]/5 to-transparent">
+        <div className="px-5 pt-5 pb-4 border-b bg-gradient-to-r from-[#463176]/5 to-transparent">
           <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#463176] text-white flex items-center justify-center shrink-0">
-              <Bookmark className="w-5 h-5" />
-            </div>
+            <div className="w-9 h-9 rounded-lg bg-[#463176] text-white flex items-center justify-center shrink-0"><Bookmark className="w-5 h-5" /></div>
             <div>
-              <h2 className="font-semibold text-gray-900">Capture on Any Website (Bookmarklet)</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
-                Drag the button below to your bookmarks bar. Then visit any page and click it to start capturing steps automatically.
-              </p>
+              <h2 className="font-semibold text-gray-900">Capture on Any Website</h2>
+              <p className="text-sm text-gray-500 mt-0.5">Drag the button to your bookmarks bar. Click it on any page — a popup opens that stays visible as you navigate to other tabs.</p>
             </div>
           </div>
         </div>
 
         <div className="p-5 space-y-4">
           <div className="flex flex-wrap items-center gap-4">
-            {/* Draggable bookmarklet link — BookmarkletLink sets the javascript: href via ref after mount */}
             <BookmarkletLink
               code={bookmarkletCode}
               data-testid="bookmarklet-link"
-              onClick={e => { e.preventDefault(); toast({ title: "Drag this to your bookmarks bar!", description: "Then click it on any page to start capturing." }); }}
+              onClick={e => { e.preventDefault(); toast({ title: "Drag this button to your bookmarks bar!", description: "Then click it on any page to open the capture popup." }); }}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#463176] text-white rounded-lg font-medium text-sm cursor-grab active:cursor-grabbing select-none shadow-sm hover:bg-[#5a3f91] transition-colors"
             >
               <Bookmark className="w-4 h-4" />
               TymFlo Capture
             </BookmarkletLink>
-            <span className="text-sm text-gray-400">← Drag this to your browser's bookmarks bar</span>
+            <span className="text-sm text-gray-400">← Drag to your bookmarks bar</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
             {[
-              ["1. Install", "Drag the button above to your bookmarks bar"],
-              ["2. Capture", "Navigate to any page, click the bookmarklet. It starts a screen share (once) then captures a screenshot on each step you click."],
-              ["3. Import", "Click Done in the floating panel — it opens TymFlo Hub and automatically imports all your steps here."],
-            ].map(([title, desc]) => (
-              <div key={title} className="bg-gray-50 rounded-lg p-3">
-                <div className="font-semibold text-gray-700 mb-1">{title}</div>
-                <div className="text-gray-500 text-xs leading-relaxed">{desc}</div>
+              ["1. Install", "Drag the button above to your browser's bookmarks bar once."],
+              ["2. Capture", "On any page, click the bookmark. A small popup appears — choose Entire Screen to capture across all tabs. Click Capture for each step."],
+              ["3. Import", "Click Done in the popup — TymFlo Hub opens automatically and your steps appear here instantly."],
+            ].map(([t, d]) => (
+              <div key={t} className="bg-gray-50 rounded-lg p-3">
+                <div className="font-semibold text-gray-700 mb-1">{t}</div>
+                <div className="text-gray-500 text-xs leading-relaxed">{d}</div>
               </div>
             ))}
           </div>
 
           <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-3">
             <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <span>The bookmarklet uses your browser's built-in screen-sharing API — no browser extension or install needed. Works on Chrome and Edge. Firefox has limited support.</span>
+            <span>The popup window is separate from your browser tabs — it stays open as you navigate. When prompted, choose <strong>Entire Screen</strong> to capture across all tabs. Works on Chrome &amp; Edge.</span>
           </div>
         </div>
       </div>
 
       {/* Manual capture */}
       <div className="bg-white rounded-xl border p-5">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-700">Or: Manual Screenshot Capture</h2>
-            <p className="text-xs text-gray-500 mt-0.5">3-second countdown gives you time to switch windows before capture.</p>
-          </div>
-          {steps.length > 0 && <Badge className="bg-[#463176]/10 text-[#463176] border-0">{steps.length} steps</Badge>}
-        </div>
-
+        <h2 className="text-sm font-semibold text-gray-700 mb-1">Manual Screenshot Capture</h2>
+        <p className="text-xs text-gray-500 mb-3">3-second countdown so you can switch windows before capture.</p>
         {countdown > 0 ? (
           <div className="flex items-center gap-4 py-2">
             <div className="text-4xl font-bold text-[#463176] animate-pulse w-10 text-center">{countdown}</div>
@@ -789,15 +839,16 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
       {steps.length > 0 && (
         <div className="bg-white rounded-xl border p-5">
           <label className="text-sm font-medium text-gray-700 block mb-2">Guide Title</label>
-          <Input placeholder="e.g. How to submit a support ticket" value={guideTitle}
-            onChange={e => setGuideTitle(e.target.value)} data-testid="input-guide-title" className="max-w-lg" />
+          <Input placeholder="e.g. How to submit a support ticket" value={guideTitle} onChange={e => setGuideTitle(e.target.value)} data-testid="input-guide-title" className="max-w-lg" />
         </div>
       )}
 
       {/* Steps */}
       {steps.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-gray-600 px-1">Steps ({steps.length})</h3>
+          <div className="flex items-center justify-between px-1">
+            <h3 className="text-sm font-semibold text-gray-600">Steps ({steps.length})</h3>
+          </div>
 
           {steps.map((step, idx) => {
             const open = expandedStep === step.id;
@@ -809,12 +860,11 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
                   {step.screenshot && <img src={step.screenshot} alt="" className="h-8 w-14 object-cover rounded border shrink-0" />}
                   <span className="flex-1 text-sm font-medium text-gray-800 truncate">{step.title}</span>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={e => { e.stopPropagation(); move(step.id, "up"); }} disabled={idx === 0} className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30 transition-colors"><ChevronUp className="w-3.5 h-3.5" /></button>
-                    <button onClick={e => { e.stopPropagation(); move(step.id, "down"); }} disabled={idx === steps.length - 1} className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30 transition-colors"><ChevronDown className="w-3.5 h-3.5" /></button>
-                    <button onClick={e => { e.stopPropagation(); remove(step.id); }} className="p-1.5 rounded hover:bg-red-50 text-red-400 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                    <button onClick={e => { e.stopPropagation(); move(step.id, "up"); }} disabled={idx === 0} className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronUp className="w-3.5 h-3.5" /></button>
+                    <button onClick={e => { e.stopPropagation(); move(step.id, "down"); }} disabled={idx === steps.length - 1} className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronDown className="w-3.5 h-3.5" /></button>
+                    <button onClick={e => { e.stopPropagation(); remove(step.id); }} className="p-1.5 rounded hover:bg-red-50 text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
-
                 {open && (
                   <div className="border-t">
                     {step.screenshot && <div className="bg-gray-950 max-h-72 overflow-hidden"><img src={step.screenshot} alt={step.title} className="w-full object-contain max-h-72" /></div>}
@@ -841,15 +891,74 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
             {countdown > 0 ? `Capturing in ${countdown}…` : "Add Another Step"}
           </button>
 
-          <div className="bg-white rounded-xl border p-4">
-            <div className="flex gap-3 flex-wrap items-center">
-              <Button onClick={exportHTML} data-testid="button-export-html" className="gap-2 bg-[#463176] hover:bg-[#5a3f91]"><Download className="w-4 h-4" /> Export as HTML</Button>
-              <Button variant="outline" onClick={copyMarkdown} data-testid="button-copy-md" className="gap-2"><ClipboardCopy className="w-4 h-4" /> Copy Markdown</Button>
-              <Button variant="outline" onClick={() => { setSteps([]); setGuideTitle(""); setExpandedStep(null); setImportBanner(null); }}
-                data-testid="button-clear" className="gap-2 text-red-500 border-red-200 hover:bg-red-50 ml-auto">
-                <Trash2 className="w-4 h-4" /> Clear All
-              </Button>
+          {/* Export & Library */}
+          <div className="bg-white rounded-xl border p-4 space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Export Guide</h3>
+              <div className="flex gap-3 flex-wrap">
+                <Button onClick={exportHTML} data-testid="button-export-html" className="gap-2 bg-[#463176] hover:bg-[#5a3f91]">
+                  <Download className="w-4 h-4" /> Export as HTML
+                </Button>
+                <Button variant="outline" onClick={copyMarkdown} data-testid="button-copy-md" className="gap-2">
+                  <ClipboardCopy className="w-4 h-4" /> Copy Markdown
+                </Button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">The exported HTML file includes hover-to-zoom on screenshots. Keep it as your saved guide.</p>
             </div>
+
+            <div className="border-t pt-3">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Browser Library</h3>
+              <div className="flex gap-3 flex-wrap">
+                <Button variant="outline" onClick={saveToLibrary} data-testid="button-save-library" className="gap-2">
+                  <BookOpen className="w-4 h-4" /> Save to Library
+                </Button>
+                <Button variant="outline" onClick={() => { setShowLibrary(!showLibrary); if (!showLibrary) loadLibrary(); }} data-testid="button-open-library" className="gap-2">
+                  <FolderOpen className="w-4 h-4" /> {showLibrary ? "Hide" : "Open"} Library
+                </Button>
+                <Button variant="outline" onClick={() => { setSteps([]); setGuideTitle(""); setExpandedStep(null); setImportBanner(false); }}
+                  data-testid="button-clear" className="gap-2 text-red-500 border-red-200 hover:bg-red-50 ml-auto">
+                  <Trash2 className="w-4 h-4" /> Clear
+                </Button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">Saves to your browser's local storage. Guides remain until you clear browser data.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Library panel */}
+      {showLibrary && (
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b bg-gray-50">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><BookOpen className="w-4 h-4" /> Saved Guides</h3>
+            <button onClick={() => setShowLibrary(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="p-4">
+            {libraryLoading ? (
+              <p className="text-sm text-gray-500 text-center py-4">Loading…</p>
+            ) : savedGuides.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">No saved guides yet. Click "Save to Library" to save the current guide.</p>
+            ) : (
+              <div className="space-y-2">
+                {savedGuides.map(g => (
+                  <div key={g.id} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-gray-50 transition-colors">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-800 truncate">{g.title}</div>
+                      <div className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                        <Clock className="w-3 h-3" />
+                        {new Date(g.savedAt).toLocaleDateString()} · {g.steps.length} steps
+                      </div>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => loadGuide(g)} className="shrink-0 gap-1">
+                      <FolderOpen className="w-3 h-3" /> Load
+                    </Button>
+                    <button onClick={() => deleteGuide(g.id)} className="p-1.5 rounded hover:bg-red-50 text-red-400 shrink-0">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -858,14 +967,17 @@ window.__tf={stop:function(){document.body.removeChild(ui);if(s)s.getTracks().fo
         <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-200">
           <Image className="w-12 h-12 text-gray-200 mx-auto mb-3" />
           <p className="text-gray-500 font-medium">No steps yet</p>
-          <p className="text-sm text-gray-400 mt-1 mb-5">Install the bookmarklet above to capture steps on any website, or use Manual Capture</p>
+          <p className="text-sm text-gray-400 mt-1 mb-5">Use the bookmarklet to capture steps on any website — it follows you across tabs</p>
           <div className="flex items-center justify-center gap-3 flex-wrap">
-            <BookmarkletLink code={bookmarkletCode} onClick={e => { e.preventDefault(); toast({ title: "Drag the button to your bookmarks bar!" }); }}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[#463176] text-white rounded-lg font-medium text-sm cursor-grab">
+            <BookmarkletLink
+              code={bookmarkletCode}
+              onClick={e => { e.preventDefault(); toast({ title: "Drag the button to your bookmarks bar!" }); }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[#463176] text-white rounded-lg font-medium text-sm cursor-grab"
+            >
               <Bookmark className="w-4 h-4" /> TymFlo Capture
             </BookmarkletLink>
             <span className="text-gray-300">or</span>
-            <Button onClick={capture} variant="outline" className="gap-2"><Image className="w-4 h-4" /> Capture Step</Button>
+            <Button onClick={capture} variant="outline" className="gap-2"><Image className="w-4 h-4" /> Manual Capture</Button>
           </div>
         </div>
       )}
