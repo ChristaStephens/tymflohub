@@ -2,9 +2,21 @@
 
 ## Overview
 
-TymFlo Hub is a freemium SaaS web application providing business calculators, PDF manipulation tools, and productivity utilities. The application features a modern, accessible interface with a "Linear-inspired premium" design system emphasizing clarity and visual polish.
+TymFlo Hub is a freemium SaaS web application with two distinct products:
 
-**Core Purpose**: Deliver fast, SEO-optimized tools for business calculations (profit margin, markup, break-even, ROI), document processing (PDF merge/split/compress, image conversion), and productivity features (timezone converter, Pomodoro timer).
+1. **TymFlo Hub** — business calculators, PDF manipulation tools, productivity utilities (the existing tools suite)
+2. **TymFlo Client Portal** — a done-for-you marketing portal for $500K+ business owners (at `/portal`)
+
+**Core Purpose**: Hub delivers tools; Portal delivers a premium "marketing is handled" client experience.
+
+### Client Portal (`/portal`)
+Standalone portal designed for TymFlo's premium clients. No setup, no data entry, no learning curve.
+- **Overview/Dashboard**: Pinned Quick Request box, "What TymFlo Did This Week" activity feed, 3-number metrics snapshot
+- **Approvals**: Decision-free content sign-off (approve or flag only)
+- **Documents**: Upload PDF/PNG/CSV and get an AI-powered plain-language summary
+- **Ask TymFlo**: AI assistant with TymFlo account context (powered by OpenAI `gpt-4o-mini`)
+
+Portal API routes are in `server/routes.ts` (prefixed `/api/portal/`). Portal data is stored in-memory (activity, metrics, approvals). Requires `OPENAI_API_KEY` env var for AI features.
 
 **Business Model**: Always free, no registration required. Optional Pro upgrade via Stripe for advanced features.
 
