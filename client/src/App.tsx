@@ -1,4 +1,4 @@
-import { Switch, Route, Router } from "wouter";
+import { Switch, Route, Router, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -7,6 +7,7 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import FloatingCoffeeButton from "@/components/FloatingCoffeeButton";
+import TymFloUpdates from "@/pages/TymFloUpdates";
 import Home from "@/pages/Home";
 import Pricing from "@/pages/Pricing";
 import Login from "@/pages/Login";
@@ -67,13 +68,25 @@ function AnalyticsWrapper({ children }: { children: React.ReactNode }) {
 function AppRouter() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      {/* TymFlo Updates — main client experience */}
+      <Route path="/" component={TymFloUpdates} />
+
+      {/* Frameless embed for Dubsado / client portal link */}
+      <Route path="/client" component={TymFloUpdates} />
+
+      {/* Resource Suite — all Hub tools */}
+      <Route path="/resources" component={Home} />
+
+      {/* Legacy portal redirect (keep working) */}
+      <Route path="/portal" component={TymFloUpdates} />
+
+      {/* Standard pages */}
       <Route path="/pricing" component={Pricing} />
       <Route path="/login" component={Login} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/privacy" component={PrivacyPolicy} />
       <Route path="/terms" component={TermsOfService} />
-      
+
       {/* Business Calculators */}
       <Route path="/tools/profit-margin" component={ProfitMargin} />
       <Route path="/tools/markup" component={Markup} />
@@ -83,48 +96,44 @@ function AppRouter() {
       <Route path="/tools/mortgage-calculator" component={MortgageCalculator} />
       <Route path="/tools/investment-calculator" component={InvestmentCalculator} />
       <Route path="/tools/compound-interest" component={CompoundInterest} />
-      
-      {/* PDF Tools - Organize */}
+
+      {/* PDF Tools */}
       <Route path="/tools/pdf-merge" component={PDFMerge} />
       <Route path="/tools/pdf-split" component={PDFSplit} />
       <Route path="/tools/pdf-compress" component={PDFCompress} />
       <Route path="/tools/pdf-rotate" component={PDFRotate} />
       <Route path="/tools/pdf-delete-pages" component={PDFDeletePages} />
       <Route path="/tools/pdf-extract" component={PDFExtract} />
-      
-      {/* PDF Tools - Convert from PDF */}
       <Route path="/tools/pdf-to-word" component={PDFToWord} />
       <Route path="/tools/pdf-to-excel" component={PDFToExcel} />
       <Route path="/tools/pdf-to-jpg" component={PDFToJPG} />
       <Route path="/tools/pdf-sign" component={PDFSign} />
-      
-      {/* PDF Tools - Convert to PDF */}
       <Route path="/tools/word-to-pdf" component={WordToPDF} />
       <Route path="/tools/excel-to-pdf" component={ExcelToPDF} />
       <Route path="/tools/jpg-to-pdf" component={JPGToPDF} />
-      
+
       {/* Image & File Tools */}
       <Route path="/tools/image-convert" component={ImageConvert} />
-      
+
       {/* Statistics */}
       <Route path="/tools/mean-median-mode" component={MeanMedianMode} />
       <Route path="/tools/standard-deviation" component={StandardDeviation} />
       <Route path="/tools/percentage" component={PercentageCalculator} />
       <Route path="/tools/ratio" component={RatioCalculator} />
-      
+
       {/* Converters */}
       <Route path="/tools/currency-converter" component={CurrencyConverter} />
       <Route path="/tools/unit-converter" component={UnitConverter} />
       <Route path="/tools/timezone" component={Timezone} />
-      
+
       {/* Productivity */}
       <Route path="/tools/pomodoro" component={Pomodoro} />
-      
+
       {/* Text Tools */}
       <Route path="/tools/text-case" component={TextCaseConverter} />
       <Route path="/tools/word-counter" component={WordCounter} />
       <Route path="/tools/text-formatter" component={TextFormatter} />
-      
+
       {/* Design Tools */}
       <Route path="/tools/color-picker" component={ColorPicker} />
       <Route path="/tools/palette-generator" component={PaletteGenerator} />
@@ -134,16 +143,16 @@ function AppRouter() {
       <Route path="/tools/business-qr" component={BusinessPageQR} />
       <Route path="/tools/menu-qr" component={MenuQR} />
       <Route path="/tools/app-qr" component={AppLinkQR} />
-      
+
       {/* Marketing Tools */}
       <Route path="/tools/presence-audit" component={PresenceAudit} />
 
       {/* Recorder */}
       <Route path="/recorder" component={Recorder} />
-      
+
       {/* Admin */}
       <Route path="/admin/analytics" component={AdminAnalytics} />
-      
+
       <Route component={NotFound} />
     </Switch>
   );
@@ -151,22 +160,43 @@ function AppRouter() {
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "") || "/";
 
+/* Routes that render without the Hub header/footer (clean embed for Dubsado) */
+const FRAMELESS_ROUTES = ["/client"];
+
+function AppShell() {
+  const [location] = useLocation();
+  const isFrameless = FRAMELESS_ROUTES.some((r) => location === r || location.startsWith(r + "/"));
+
+  if (isFrameless) {
+    return (
+      <>
+        <AppRouter />
+        <Toaster />
+      </>
+    );
+  }
+
+  return (
+    <AnalyticsWrapper>
+      <div className="flex flex-col min-h-screen">
+        <Header />
+        <main className="flex-1">
+          <AppRouter />
+        </main>
+        <Footer />
+      </div>
+      <FloatingCoffeeButton />
+      <Toaster />
+    </AnalyticsWrapper>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Router base={basePath === "/" ? "" : basePath}>
-          <AnalyticsWrapper>
-            <div className="flex flex-col min-h-screen">
-              <Header />
-              <main className="flex-1">
-                <AppRouter />
-              </main>
-              <Footer />
-            </div>
-            <FloatingCoffeeButton />
-            <Toaster />
-          </AnalyticsWrapper>
+          <AppShell />
         </Router>
       </TooltipProvider>
     </QueryClientProvider>
