@@ -1161,6 +1161,252 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── IFRAME EMBEDDING — allow Dubsado and other portals to embed this app ──
+  app.use((_req, res, next) => {
+    res.removeHeader("X-Frame-Options");
+    res.setHeader("Content-Security-Policy", "frame-ancestors *");
+    next();
+  });
+
+  // ─── PORTAL IN-MEMORY STORE ─────────────────────────────────────────────────
+  interface PortalRequest { id: number; text: string; createdAt: string; }
+  interface PortalApproval { id: number; type: string; title: string; preview: string; platform: string; scheduledFor: string; status: "pending" | "approved" | "flagged"; }
+  interface PortalActivity { id: number; date: string; text: string; }
+  interface PortalMetric { label: string; value: string; note: string; }
+
+  const portalRequests: PortalRequest[] = [];
+  let portalRequestIdSeq = 1;
+
+  const portalApprovals: PortalApproval[] = [
+    { id: 1, type: "Email", title: "April Newsletter — Spring Offer", preview: "Subject: Something big is coming your way this April...\n\nHi [First Name],\n\nWe've been working behind the scenes on something that's going to make your spring a lot easier. Stay tuned — you'll want to be first to know.", platform: "Mailchimp", scheduledFor: "April 2, 2026", status: "pending" },
+    { id: 2, type: "Instagram Post", title: "Behind-the-scenes team photo", preview: "Caption: The team that makes it happen. Every week, same mission — results for our clients. No smoke. No mirrors. Just work.\n\n#TymFlo #MarketingDoneForYou #SmallBusiness", platform: "Instagram", scheduledFor: "April 3, 2026", status: "pending" },
+    { id: 3, type: "Google Ad", title: "Spring Campaign — Search Ad", preview: "Headline: Marketing That Runs Itself\nDescription: Stop managing your marketing. Let TymFlo handle it — results without the meetings. Book a free strategy call today.", platform: "Google Ads", scheduledFor: "April 5, 2026", status: "approved" },
+  ];
+
+  const portalActivity: PortalActivity[] = [
+    { id: 1, date: "March 28, 2026", text: "Posted 3 times to Instagram. Engagement is up 18% from last week." },
+    { id: 2, date: "March 27, 2026", text: "Sent email campaign to 1,240 contacts. Open rate: 34% — above industry average." },
+    { id: 3, date: "March 26, 2026", text: "Updated your Google Business profile with new hours and 2 fresh photos." },
+    { id: 4, date: "March 25, 2026", text: "Published 1 LinkedIn article and boosted your top-performing post from last month." },
+    { id: 5, date: "March 24, 2026", text: "Researched and drafted next week's content — 7 posts ready for review." },
+  ];
+
+  const portalMetrics: PortalMetric[] = [
+    { label: "Website Visitors", value: "1,847", note: "Up 12% from last month. Your product page is getting the most traffic." },
+    { label: "Emails Sent", value: "3,621", note: "Sent across 3 campaigns. Your Wednesday email is performing best." },
+    { label: "Top Post", value: "6.2K", note: "Your Tuesday reel reached 6,200 people — highest this quarter." },
+  ];
+
+  // ─── PORTAL ROUTES ─────────────────────────────────────────────────────────
+
+  app.get("/api/portal/activity", (_req, res) => {
+    res.json({ items: portalActivity });
+  });
+
+  app.get("/api/portal/metrics", (_req, res) => {
+    res.json({ metrics: portalMetrics });
+  });
+
+  app.get("/api/portal/approvals", (_req, res) => {
+    res.json({ items: portalApprovals });
+  });
+
+  app.post("/api/portal/request", (req, res) => {
+    const { text } = req.body;
+    if (!text || typeof text !== "string") {
+      return res.status(400).json({ error: "text is required" });
+    }
+    const item: PortalRequest = {
+      id: portalRequestIdSeq++,
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    portalRequests.push(item);
+    console.log(`[Portal] New client request #${item.id}: ${item.text.slice(0, 80)}`);
+    res.json({ success: true, id: item.id });
+  });
+
+  app.post("/api/portal/approve", (req, res) => {
+    const { id, status } = req.body;
+    if (!id || !status) return res.status(400).json({ error: "id and status are required" });
+    const item = portalApprovals.find((a) => a.id === Number(id));
+    if (!item) return res.status(404).json({ error: "Approval item not found" });
+    item.status = status;
+    res.json({ success: true });
+  });
+
+  // Document summarization — uses OpenAI if key is set, otherwise provides a structured fallback
+  const portalUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+  app.post("/api/portal/summarize", portalUpload.single("file"), async (req, res) => {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      // Provide a meaningful fallback when no AI key is configured
+      const fileName = file.originalname.toLowerCase();
+      let summary = "";
+      if (fileName.endsWith(".csv")) {
+        summary = `File received: ${file.originalname} (${(file.size / 1024).toFixed(1)} KB)\n\nThis appears to be a data file. To enable AI-powered summaries, add your OpenAI API key in the project settings.\n\nIn the meantime, your TymFlo team can review this file directly — just send it via the Quick Request box.`;
+      } else if (fileName.endsWith(".pdf")) {
+        summary = `File received: ${file.originalname} (${(file.size / 1024).toFixed(1)} KB)\n\nThis is a PDF document. To enable AI-powered summaries, add your OpenAI API key in the project settings.\n\nYour TymFlo team can review and summarize this for you — send it as a Quick Request.`;
+      } else {
+        summary = `File received: ${file.originalname} (${(file.size / 1024).toFixed(1)} KB)\n\nTo enable AI-powered summaries for images and documents, add your OpenAI API key in the project settings.\n\nYour TymFlo team is always available via the Quick Request box.`;
+      }
+      return res.json({ summary });
+    }
+
+    try {
+      // Use OpenAI vision or text analysis depending on file type
+      const fileName = file.originalname.toLowerCase();
+      let prompt = "";
+      let requestBody: any;
+
+      if (fileName.endsWith(".csv")) {
+        // Parse CSV text content
+        const text = file.buffer.toString("utf-8").slice(0, 8000);
+        prompt = `You are a business analyst. Summarize this CSV data for a busy $500K+ business owner who doesn't want details — just the key takeaways. What does this data show? What's the most important thing they should know? Keep it under 150 words, plain language, no jargon.\n\nCSV Data:\n${text}`;
+        requestBody = {
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 300,
+        };
+      } else if (fileName.endsWith(".pdf")) {
+        // For PDF, extract text if possible, otherwise note limitations
+        const text = file.buffer.toString("utf-8", 0, 4000).replace(/[^\x20-\x7E\n]/g, " ");
+        prompt = `You are a business analyst. The following is extracted text from a PDF. Summarize the key points for a busy business owner in under 150 words. Plain language, no jargon. If the text seems garbled, say so and suggest they share the file directly with their team.\n\nExtracted text:\n${text}`;
+        requestBody = {
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 300,
+        };
+      } else {
+        // Image file — use vision
+        const base64 = file.buffer.toString("base64");
+        const mimeType = file.mimetype || "image/png";
+        requestBody = {
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "You are a business analyst. Describe the key information in this image for a busy business owner. Keep it under 150 words, plain language, no jargon. Focus on what matters most." },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+            ],
+          }],
+          max_tokens: 300,
+        };
+      }
+
+      const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiKey}` },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!aiRes.ok) {
+        const err = await aiRes.text();
+        console.error("[Portal/summarize] OpenAI error:", err);
+        return res.status(500).json({ error: "AI summary failed" });
+      }
+
+      const aiData = await aiRes.json() as any;
+      const summary = aiData.choices?.[0]?.message?.content ?? "Could not generate summary.";
+      res.json({ summary });
+    } catch (err) {
+      console.error("[Portal/summarize] Error:", err);
+      res.status(500).json({ error: "Failed to summarize file" });
+    }
+  });
+
+  // ─── WEEKLY BRIEF ──────────────────────────────────────────────────────────
+  interface BriefItem { category: string; text: string; }
+  interface BriefStore { weekOf: string; items: BriefItem[]; }
+
+  let portalBrief: BriefStore = {
+    weekOf: "March 24–28, 2026",
+    items: [
+      { category: "Consumer Trends", text: "Consumers are responding more to trust signals than price — businesses with consistent brand messaging are seeing higher retention even in tighter economic conditions." },
+      { category: "Local Market", text: "Detroit-area small business formation is up 8% year-over-year, with service businesses leading — competition in your sector is growing, and visibility matters more now." },
+      { category: "Platform Changes", text: "Instagram's algorithm is now favoring accounts that post consistently 3–4x per week — TymFlo's posting cadence is already aligned with this shift." },
+      { category: "AI Watch", text: "AI-generated search answers now appear for 75% of service-based business searches — visibility depends heavily on review volume and structured website content." },
+      { category: "Business Climate", text: "Consumer spending on professional services held steady in Q1 even as retail pulled back — service businesses are in a strong position heading into Q2." },
+    ],
+  };
+
+  app.get("/api/portal/brief", (_req, res) => {
+    res.json(portalBrief);
+  });
+
+  // Admin-protected brief update
+  app.post("/api/portal/brief", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "No token" });
+      const storedToken = await storage.getAdminSetting("admin_token");
+      const tokenExpiry = await storage.getAdminSetting("admin_token_expiry");
+      if (!storedToken || token !== storedToken) return res.status(401).json({ error: "Invalid token" });
+      if (tokenExpiry && Date.now() > parseInt(tokenExpiry)) return res.status(401).json({ error: "Token expired" });
+      const { weekOf, items } = req.body;
+      if (weekOf) portalBrief.weekOf = weekOf;
+      if (Array.isArray(items)) portalBrief.items = items;
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update brief" });
+    }
+  });
+
+  // AI Chat — uses OpenAI if available
+  app.post("/api/portal/chat", async (req, res) => {
+    const { message, history } = req.body;
+    if (!message) return res.status(400).json({ error: "message is required" });
+
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      return res.json({
+        reply: "I'm your TymFlo assistant. To enable AI-powered responses, your team needs to add an OpenAI API key to the project.\n\nFor now, reach out directly via the Quick Request box — your team will get back to you quickly.",
+      });
+    }
+
+    try {
+      const systemPrompt = `You are TymFlo's dedicated client assistant. TymFlo is a done-for-you marketing agency that serves $500K–$2M business owners who want results without involvement.
+
+Your role: Answer questions about the client's marketing, what TymFlo is doing, performance metrics, and next steps. Be concise, direct, and reassuring. Never suggest the client do anything themselves — TymFlo handles it all. Keep answers to 2-3 sentences unless more detail is needed. Speak like a trusted team member, not a chatbot.
+
+Current context:
+- This week TymFlo posted 3x to Instagram, sent an email to 1,240 contacts, and updated the Google Business profile
+- Website visitors this month: 1,847 (up 12%)
+- Next scheduled content: April newsletter on April 2, Instagram post on April 3
+- The team is available for any requests via the Quick Request box`;
+
+      const messages = [
+        { role: "system", content: systemPrompt },
+        ...(Array.isArray(history) ? history.slice(-10).map((m: any) => ({ role: m.role, content: m.content })) : []),
+        { role: "user", content: message },
+      ];
+
+      const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiKey}` },
+        body: JSON.stringify({ model: "gpt-4o-mini", messages, max_tokens: 300 }),
+      });
+
+      if (!aiRes.ok) {
+        const err = await aiRes.text();
+        console.error("[Portal/chat] OpenAI error:", err);
+        return res.status(500).json({ error: "AI chat failed" });
+      }
+
+      const aiData = await aiRes.json() as any;
+      const reply = aiData.choices?.[0]?.message?.content ?? "I couldn't generate a response. Try again.";
+      res.json({ reply });
+    } catch (err) {
+      console.error("[Portal/chat] Error:", err);
+      res.status(500).json({ error: "Chat failed" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;
