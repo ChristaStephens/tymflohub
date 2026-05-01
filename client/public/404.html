@@ -4,12 +4,9 @@
   <meta charset="utf-8" />
   <title>TymFlo Hub</title>
   <script>
-    var pathSegmentsToKeep = 1;
     var l = window.location;
-    var parts = l.pathname.split('/').filter(Boolean);
-    var base = '/' + parts.slice(0, pathSegmentsToKeep).join('/') + '/';
     sessionStorage.redirect = l.pathname + l.search + l.hash;
-    l.replace(base);
+    l.replace('/');
   </script>
 </head>
 <body>
