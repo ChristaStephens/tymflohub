@@ -32,6 +32,8 @@ import PDFToWord from "@/pages/tools/PDFToWord";
 import PDFToExcel from "@/pages/tools/PDFToExcel";
 import PDFToJPG from "@/pages/tools/PDFToJPG";
 import PDFSign from "@/pages/tools/PDFSign";
+import PDFEdit from "@/pages/tools/PDFEdit";
+import PDFFill from "@/pages/tools/PDFFill";
 import WordToPDF from "@/pages/tools/WordToPDF";
 import ExcelToPDF from "@/pages/tools/ExcelToPDF";
 import JPGToPDF from "@/pages/tools/JPGToPDF";
@@ -97,6 +99,8 @@ function AppRouter() {
       <Route path="/tools/pdf-to-excel" component={PDFToExcel} />
       <Route path="/tools/pdf-to-jpg" component={PDFToJPG} />
       <Route path="/tools/pdf-sign" component={PDFSign} />
+      <Route path="/tools/pdf-edit" component={PDFEdit} />
+      <Route path="/tools/pdf-fill" component={PDFFill} />
       
       {/* PDF Tools - Convert to PDF */}
       <Route path="/tools/word-to-pdf" component={WordToPDF} />
