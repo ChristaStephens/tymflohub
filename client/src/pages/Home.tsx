@@ -64,6 +64,24 @@ const allTools = [
     category: "Organize PDF",
     categoryColor: "from-purple-500 to-purple-600",
   },
+  {
+    title: "Edit PDF",
+    description: "Add text, highlights, shapes, and whiteout sections to any PDF.",
+    icon: PenLine,
+    href: "/tools/pdf-edit",
+    badge: "New" as const,
+    category: "Organize PDF",
+    categoryColor: "from-purple-500 to-purple-600",
+  },
+  {
+    title: "Fill in PDF",
+    description: "Fill in PDF forms — text fields, checkboxes, dropdowns and more.",
+    icon: FileText,
+    href: "/tools/pdf-fill",
+    badge: "New" as const,
+    category: "Organize PDF",
+    categoryColor: "from-purple-500 to-purple-600",
+  },
 
   // ============ PDF TOOLS - CONVERT FROM PDF ============
   {
